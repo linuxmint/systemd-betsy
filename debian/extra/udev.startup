@@ -1,0 +1,18 @@
+#!/bin/sh -e
+
+echo > /sys/kernel/uevent_helper
+
+if ! grep -E -q "^[^[:space:]]+ /dev (dev)?tmpfs" /proc/mounts; then
+  mount -t devtmpfs devtmpfs /dev
+fi
+
+/lib/systemd/systemd-udevd --daemon --resolve-names=never
+
+udevadm trigger --action=add
+
+udevadm settle || true
+
+mkdir -p /dev/pts
+mount -t devpts -o noexec,nosuid,gid=5,mode=0620 devpts /dev/pts
+
+exit 0

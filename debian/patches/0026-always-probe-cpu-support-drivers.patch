@@ -1,0 +1,22 @@
+Description: always probe cpu support drivers
+ The kernel from v3.11 now reports (correctly) that there is a
+ CPU driver connected to the CPUs in the kernel.  This causes udev
+ to ignore the device and prevents any CPU helper modules such as KVM or
+ AES optimisations from being loaded.  These should be loaded regardless
+ of whether there is a CPU driver.
+Author: Andy Whitcroft <apw@canonical.com>
+Reported-by: Chris J Arges <chris.j.arges@canonical.com>
+Bug-Ubuntu: https://bugs.launchpad.net/ubuntu/+source/systemd/+bug/1207705
+Forwarded: no
+Last-Update: 2013-08-02
+
+--- systemd-204.orig/rules/80-drivers.rules
++++ systemd-204/rules/80-drivers.rules
+@@ -3,6 +3,7 @@
+ ACTION=="remove", GOTO="drivers_end"
+ 
+ DRIVER!="?*", ENV{MODALIAS}=="?*", RUN{builtin}="kmod load $env{MODALIAS}"
++SUBSYSTEM=="cpu", ENV{MODALIAS}=="?*", RUN{builtin}="kmod load $env{MODALIAS}"
+ SUBSYSTEM=="tifm", ENV{TIFM_CARD_TYPE}=="SD", RUN{builtin}="kmod load tifm_sd"
+ SUBSYSTEM=="tifm", ENV{TIFM_CARD_TYPE}=="MS", RUN{builtin}="kmod load tifm_ms"
+ SUBSYSTEM=="memstick", RUN{builtin}="kmod load ms_block mspro_block"

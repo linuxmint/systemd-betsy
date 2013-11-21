@@ -1,0 +1,16 @@
+Description: Set default polling interval on CD drives as well. The events_dfl_poll_msecs will not trigger if "block" is not a module, but built in. This will avoid udisks etc. having to poll from userspace, and provide proper ejection when the hardware eject button is pressed.
+Author: Martin Pitt <martin.pitt@ubuntu.com>
+Bug-Ubuntu: https://launchpad.net/bugs/890592
+
+Index: systemd/rules/60-persistent-storage.rules
+===================================================================
+--- systemd.orig/rules/60-persistent-storage.rules	2013-01-30 04:32:08.399835311 +0100
++++ systemd/rules/60-persistent-storage.rules	2013-05-10 10:56:53.165247525 +0200
+@@ -10,6 +10,7 @@
+ 
+ # enable in-kernel media-presence polling
+ ACTION=="add", SUBSYSTEM=="module", KERNEL=="block", ATTR{parameters/events_dfl_poll_msecs}=="0", ATTR{parameters/events_dfl_poll_msecs}="2000"
++ACTION=="add", ATTR{removable}=="1", ATTR{events_poll_msecs}=="-1", ATTR{events_poll_msecs}="2000"
+ 
+ SUBSYSTEM!="block", GOTO="persistent_storage_end"
+ 

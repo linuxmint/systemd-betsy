@@ -1,0 +1,22 @@
+Description: Fix sd_login_monitor_new() to not fail if there is no /sys/fs/cgroup/systemd/machine; that only exists when running with systemd as PID 1.
+Author: Martin Pitt <martin.pitt@ubuntu.com>
+Bug-Ubuntu: https://launchpad.net/bugs/1201180
+
+Index: systemd/src/login/sd-login.c
+===================================================================
+--- systemd.orig/src/login/sd-login.c	2013-05-07 21:07:22.906025572 +0200
++++ systemd/src/login/sd-login.c	2013-07-19 08:38:39.437270958 +0200
+@@ -690,10 +690,13 @@
+                         return r;
+ 
+                 k = inotify_add_watch(fd, p, IN_MOVED_TO|IN_CREATE|IN_DELETE);
++                /* when running logind without pid 1, this will fail */
++                /*
+                 if (k < 0) {
+                         close_nointr_nofail(fd);
+                         return -errno;
+                 }
++                */
+ 
+                 good = true;
+         }

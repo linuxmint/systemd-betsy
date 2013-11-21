@@ -1,0 +1,59 @@
+#!/bin/sh -e
+# This script can be called in the following ways:
+#
+# Before the package is installed:
+#	<new-preinst> install
+#
+# Before removed package is upgraded:
+#	<new-preinst> install <old-version>
+#
+# Before the package is upgraded:
+#	<new-preinst> upgrade <old-version>
+#
+#
+# If postrm fails during upgrade or fails on failed upgrade:
+#	<old-preinst> abort-upgrade <new-version>
+
+
+# Disable udevadm from being run during an upgrade, to cause installation
+# failures of packages which call udevadm trigger without depending on udev
+disable_udevadm()
+{
+    dpkg-divert --package fake-udev --rename --divert /bin/udevadm.upgrade \
+    		--add /bin/udevadm
+
+    cat <<'UDEVADM' > /bin/udevadm
+#!/bin/sh
+
+if [ "$1" = "trigger" ]; then
+    echo "udevadm trigger is not permitted while udev is unconfigured." 1>&2
+    exit 1
+fi
+
+if [ "$1" = "settle" ]; then
+    echo "udevadm settle is not permitted while udev is unconfigured." 1>&2
+    exit 1
+fi
+
+exec /bin/bash -c "exec -a \"\$0\" /bin/udevadm.upgrade \"\$@\"" "$0" "$@"
+UDEVADM
+    chmod +x /bin/udevadm
+}
+
+
+case "$1" in
+    install|upgrade)
+    	disable_udevadm
+	;;
+
+    abort-upgrade)
+	;;
+
+    *)
+	echo "$0 called with unknown argument \`$1'" 1>&2
+	exit 1
+	;;
+esac
+
+#DEBHELPER#
+exit 0

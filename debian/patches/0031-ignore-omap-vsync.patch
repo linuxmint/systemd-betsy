@@ -1,0 +1,77 @@
+Description: Ignore VSYNC change uevents from omapfb, as they happen at each vsync and thus keep waking up udevd (including rules processing), upstart, and other parts of the system 60 times a second.
+Author: Martin Pitt <martin.pitt@ubuntu.com>
+Forwarded: Heck, don't ever show this embarassing hack to anyone. Except if that anyone is an omapfb author, then please don't stop showing this to them until they fix the driver :-)
+Bug-Ubuntu: https://launchpad.net/bugs/1234743
+
+Index: systemd/src/libudev/libudev-monitor.c
+===================================================================
+--- systemd.orig/src/libudev/libudev-monitor.c	2013-02-20 02:32:41.900839006 +0100
++++ systemd/src/libudev/libudev-monitor.c	2013-10-17 11:38:56.216374114 +0200
+@@ -198,6 +198,9 @@
+         (*i)++;
+ }
+ 
++/* return uint32_t for the first 4 characters in s */
++#define str2word(s) ((s[0] << 24) | (s[1] << 16) | (s[2] << 8) | s[3])
++
+ /**
+  * udev_monitor_filter_update:
+  * @udev_monitor: monitor
+@@ -216,6 +219,11 @@
+         int err;
+ 
+         if (udev_list_get_entry(&udev_monitor->filter_subsystem_list) == NULL &&
++#ifdef __arm__
++            /* we always need a filter chain for kernel monitors to get rid
++             * of the omapfb VSYNC uevents */
++            udev_monitor->snl.nl.nl_groups != UDEV_MONITOR_KERNEL &&
++#endif
+             udev_list_get_entry(&udev_monitor->filter_tag_list) == NULL)
+                 return 0;
+ 
+@@ -224,8 +232,45 @@
+ 
+         /* load magic in A */
+         bpf_stmt(ins, &i, BPF_LD|BPF_W|BPF_ABS, offsetof(struct udev_monitor_netlink_header, magic));
++#ifndef __arm__
+         /* jump if magic matches */
+         bpf_jmp(ins, &i, BPF_JMP|BPF_JEQ|BPF_K, UDEV_MONITOR_MAGIC, 1, 0);
++#else
++        /* jump over our whole omapfb/VSYNC check if magic matches */
++        bpf_jmp(ins, &i, BPF_JMP|BPF_JEQ|BPF_K, UDEV_MONITOR_MAGIC, 10, 0);
++
++        /* filter out omapfb change VSYNC uevents (LP #1234743); they look like
++change@/devices/platform/omapfb\x00ACTION=change\x00DEVPATH=/devices/platform/omapfb\x00SUBSYSTEM=platform\x00VSYNC=1737775695800\x00DRIVER=omapfb\x00MODALIAS=platform:omapfb\x00SEQNUM=8909\x00
++
++         Matching on the VSYNC attribute is a bit finicky, as its exact
++         position in the packet might not be reliable. The real VSYNC uevents
++         have packets of ~ 170 bytes length (varying with the string length of
++         VSYNC= and SEQNUM), while a simple synthetic
++         "echo change | tee /sys/devices/platform/omapfb/uevent" only has 150.
++         So we instead just compare the length of the packet and use 160 as a divider.
++         As we don't generally care about that device at all, this logic does
++         not need to be rock solid, though -- if we would just ignore all
++         change events from that device nothing should break.
++         */
++
++        /* if the event is shorter than 160 bytes, it can't be omapfb/VSYNC, jump to "pass" */
++        bpf_stmt(ins, &i, BPF_LD|BPF_W|BPF_LEN, 0);
++        bpf_jmp(ins, &i, BPF_JMP|BPF_JGE|BPF_K, 160, 0, 7);
++
++        /* check if it is a change event; if not, jump to "pass" */
++        bpf_stmt(ins, &i, BPF_LD|BPF_W|BPF_ABS, 0);
++        bpf_jmp(ins, &i, BPF_JMP|BPF_JEQ|BPF_K, str2word("chan"), 0, 5);
++
++        /* check if it is from omapfb */
++        bpf_stmt(ins, &i, BPF_LD|BPF_W|BPF_ABS, 24);
++        bpf_jmp(ins, &i, BPF_JMP|BPF_JEQ|BPF_K, str2word("/oma"), 0, 3);
++        bpf_stmt(ins, &i, BPF_LD|BPF_W|BPF_ABS, 28);
++        bpf_jmp(ins, &i, BPF_JMP|BPF_JEQ|BPF_K, str2word("pfb\0"), 0, 1);
++
++        /* we found the omapfb change uevent, reject it */
++        bpf_stmt(ins, &i, BPF_RET|BPF_K, 0);
++#endif /* omapfb filter hack on __arm__ */
++
+         /* wrong magic, pass packet */
+         bpf_stmt(ins, &i, BPF_RET|BPF_K, 0xffffffff);
+ 

@@ -1,0 +1,43 @@
+#!/bin/sh
+set -e
+
+# Enable udevadm again
+enable_udevadm()
+{
+    if [ -e /bin/udevadm.upgrade ]; then
+	    rm -f /bin/udevadm
+	    dpkg-divert --package fake-udev --rename --divert /bin/udevadm.upgrade \
+			--remove /bin/udevadm
+    fi
+}
+
+update_hwdb() {
+  udevadm hwdb --update || true
+}
+
+case "$1" in
+    configure)
+        # update/create hwdb before we (re)start udev
+        update_hwdb
+
+	invoke-rc.d udev restart
+	enable_udevadm
+	update-initramfs -u
+	;;
+
+    abort-upgrade|abort-deconfigure|abort-remove)
+	;;
+
+    triggered)
+	update_hwdb
+	exit 0
+	;;
+
+    *)
+	echo "$0 called with unknown argument \`$1'" 1>&2
+	exit 1
+	;;
+esac
+
+#DEBHELPER#
+exit 0

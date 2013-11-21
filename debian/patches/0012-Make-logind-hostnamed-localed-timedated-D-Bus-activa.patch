@@ -1,0 +1,64 @@
+From 923f008b32c9177ffae5420f7fdf25e1dcc84c75 Mon Sep 17 00:00:00 2001
+From: Michael Biebl <biebl@debian.org>
+Date: Fri, 8 Mar 2013 07:46:10 +0100
+Subject: [PATCH 12/15] Make logind/hostnamed/localed/timedated D-Bus
+ activatable on non-systemd
+
+---
+ src/hostname/org.freedesktop.hostname1.service |    2 +-
+ src/locale/org.freedesktop.locale1.service     |    2 +-
+ src/login/org.freedesktop.login1.service       |    2 +-
+ src/timedate/org.freedesktop.timedate1.service |    2 +-
+ 4 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/hostname/org.freedesktop.hostname1.service b/src/hostname/org.freedesktop.hostname1.service
+index 6041ed6..7d923a5 100644
+--- a/src/hostname/org.freedesktop.hostname1.service
++++ b/src/hostname/org.freedesktop.hostname1.service
+@@ -7,6 +7,6 @@
+ 
+ [D-BUS Service]
+ Name=org.freedesktop.hostname1
+-Exec=/bin/false
++Exec=/lib/systemd/systemd-hostnamed
+ User=root
+ SystemdService=dbus-org.freedesktop.hostname1.service
+diff --git a/src/locale/org.freedesktop.locale1.service b/src/locale/org.freedesktop.locale1.service
+index 025f9a0..8abbbfe 100644
+--- a/src/locale/org.freedesktop.locale1.service
++++ b/src/locale/org.freedesktop.locale1.service
+@@ -7,6 +7,6 @@
+ 
+ [D-BUS Service]
+ Name=org.freedesktop.locale1
+-Exec=/bin/false
++Exec=/lib/systemd/systemd-localed
+ User=root
+ SystemdService=dbus-org.freedesktop.locale1.service
+diff --git a/src/login/org.freedesktop.login1.service b/src/login/org.freedesktop.login1.service
+index 762dae2..d10f631 100644
+--- a/src/login/org.freedesktop.login1.service
++++ b/src/login/org.freedesktop.login1.service
+@@ -7,6 +7,6 @@
+ 
+ [D-BUS Service]
+ Name=org.freedesktop.login1
+-Exec=/bin/false
++Exec=/lib/systemd/systemd-logind
+ User=root
+ SystemdService=dbus-org.freedesktop.login1.service
+diff --git a/src/timedate/org.freedesktop.timedate1.service b/src/timedate/org.freedesktop.timedate1.service
+index 875f4be..198777d 100644
+--- a/src/timedate/org.freedesktop.timedate1.service
++++ b/src/timedate/org.freedesktop.timedate1.service
+@@ -7,6 +7,6 @@
+ 
+ [D-BUS Service]
+ Name=org.freedesktop.timedate1
+-Exec=/bin/false
++Exec=/lib/systemd/systemd-timedated
+ User=root
+ SystemdService=dbus-org.freedesktop.timedate1.service
+-- 
+1.7.10.4
+

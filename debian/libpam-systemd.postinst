@@ -1,0 +1,14 @@
+#! /bin/sh
+
+set -e
+
+pam-auth-update --package
+
+# upgrading from pre-204 needs a reboot due to changed cgroup layout,
+# restarting logind after the upgrade would lose all existing sessions
+if dpkg --compare-versions "$2" lt-nl 204 &&
+   [ -x /usr/share/update-notifier/notify-reboot-required ]; then
+    /usr/share/update-notifier/notify-reboot-required
+fi
+
+#DEBHELPER#

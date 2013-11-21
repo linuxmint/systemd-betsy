@@ -1,0 +1,219 @@
+#! /usr/bin/make -f
+
+#export DH_VERBOSE=1
+#export DEB_BUILD_OPTIONS="nostrip"
+
+FLAVORS = deb udeb
+
+VERSION = $(shell dpkg-parsechangelog | sed -n -e '/^Version:/s/.*: //p')
+
+DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+DEB_BUILD_GNU_TYPE ?= $(shell dpkg-architecture -qDEB_BUILD_GNU_TYPE)
+
+CONFFLAGS = \
+	--disable-silent-rules \
+	--build=$(DEB_BUILD_GNU_TYPE) \
+	--prefix=/usr \
+	--sysconfdir=/etc \
+	--localstatedir=/var \
+	--libdir=\$${prefix}/lib/$(DEB_HOST_MULTIARCH) \
+	--libexecdir=\$${prefix}/lib/$(DEB_HOST_MULTIARCH) \
+	--with-rootprefix= \
+	--with-rootlibdir=/lib/$(DEB_HOST_MULTIARCH) \
+	--with-firmware-path=/lib/firmware	\
+	--with-sysvinit-path=/etc/init.d \
+	--with-sysvrcnd-path=/etc \
+	--enable-libcryptsetup \
+	--enable-tcpwrap \
+	--disable-coredump \
+	--disable-efi \
+	--disable-myhostname \
+	--disable-keymap \
+	--disable-vconsole
+
+CONFFLAGS_deb = \
+	--enable-selinux \
+	--enable-introspection \
+	--enable-gtk-doc
+
+CONFFLAGS_udeb = \
+	--disable-selinux \
+	--disable-introspection \
+	--disable-gtk-doc \
+	--disable-binfmt \
+	--disable-readahead \
+	--disable-bootchart \
+	--disable-quotacheck \
+	--disable-randomseed \
+	--disable-logind \
+	--disable-hostnamed \
+	--disable-timedated \
+	--disable-localed \
+	--disable-polkit \
+	--disable-acl \
+	--disable-xattr \
+	--disable-gudev \
+	--disable-manpages \
+	--without-python
+
+# Ubuntu: systemd{,-sysv} not yet approved for universe
+ifeq ($(shell dpkg-vendor --derives-from Ubuntu && echo ubuntu),ubuntu)
+BINARY_BLACKLIST = -Nsystemd -Nsystemd-sysv
+endif
+
+override_dh_auto_configure: $(FLAVORS:%=debian/stamps/configure-%)
+debian/stamps/configure-%:
+	mkdir -p debian/build/$*
+	mkdir -p debian/stamps/
+	# workaround for gtk-doc sucking at oot builds
+	tar cpf - . --exclude=debian | tar xpf - -C debian/build/$*
+	cd debian/build/$* && ./configure $(CONFFLAGS) $(CONFFLAGS_$*)
+	touch $@
+
+override_dh_auto_build: $(FLAVORS:%=debian/stamps/build-%)
+debian/stamps/build-%:
+	# remove pre-generated man pages so they are rebuilt
+	rm -f debian/build/$*/man/*.[13578]
+	make -C debian/build/$*
+
+override_dh_auto_install: $(FLAVORS:%=debian/stamps/install-%)
+debian/stamps/install-%:
+	make -C debian/build/$* install DESTDIR=$(CURDIR)/debian/install/$*
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf debian/build/
+	rm -rf debian/install/
+	rm -rf debian/stamps/
+
+override_dh_install:
+	rm -f debian/install/*/usr/share/doc/systemd/LICENSE.*
+	rm -f debian/install/*/var/log/README
+	rm -f debian/install/*/etc/init.d/README
+	find debian/install/ -name '*.la' -delete
+ifeq (udeb ,$(filter udeb, $(FLAVORS)))
+	dh_install -pudev-udeb -plibudev1-udeb --sourcedir=debian/install/udeb
+	# udev-udeb
+	install -D --mode=755 debian/extra/udev.startup \
+		debian/udev-udeb/lib/debian-installer/start-udev
+	install -D --mode=755 debian/extra/udev.base-installer \
+		debian/udev-udeb/usr/lib/base-installer.d/05udev
+	# drop rules which we don't need in the installer
+	rm debian/udev-udeb/lib/udev/rules.d/60-persistent-v4l.rules
+	rm debian/udev-udeb/lib/udev/rules.d/61-accelerometer.rules
+endif
+	dh_install -Nudev-udeb -Nlibudev1-udeb --sourcedir=debian/install/deb -O--parallel -Xetc/rpm/ --list-missing
+	# install some files manually, --sourcedir makes that necessary
+	# systemd
+	cp -a debian/pam-configs debian/libpam-systemd/usr/share/
+	install -D --mode=644 debian/init-functions.d/40-systemd \
+		debian/systemd/lib/lsb/init-functions.d/40-systemd
+	install --mode=644 debian/tmpfiles.d/debian.conf \
+		debian/systemd/usr/lib/tmpfiles.d/
+	install --mode=644 debian/debian-fixup.service debian/ifup@.service \
+		debian/units/run-lock.mount debian/units/run-user.mount \
+		debian/debian-enable-units.service \
+		debian/systemd/lib/systemd/system/
+	install --mode=644 debian/unit.blacklist \
+		debian/systemd/usr/share/systemd/
+	install --mode=755 debian/debian-fixup debian/debian-enable-units \
+		debian/systemd/lib/systemd/
+	# initramfs-tools support
+	install -D --mode=755 debian/extra/initramfs.hook \
+		debian/udev/usr/share/initramfs-tools/hooks/udev
+	install -D --mode=755 debian/extra/initramfs.top \
+		debian/udev/usr/share/initramfs-tools/scripts/init-top/udev
+	install -D --mode=755 debian/extra/initramfs.bottom \
+		debian/udev/usr/share/initramfs-tools/scripts/init-bottom/udev
+	# documentation
+	install -m 644 -o root -g root debian/extra/README-etc-rules.d \
+		debian/udev/etc/udev/rules.d/README
+	install -m 644 -o root -g root debian/extra/README-lib-rules.d \
+		debian/udev/lib/udev/rules.d/README
+
+	# TODO: use a script to find duplicates and remove them automatically
+	# files shipped by systemd-sysv / sysvinit
+	rm debian/systemd/usr/share/man/man1/init.1
+	rm debian/systemd/usr/share/man/man8/halt.8
+	rm debian/systemd/usr/share/man/man8/poweroff.8
+	rm debian/systemd/usr/share/man/man8/reboot.8
+	rm debian/systemd/usr/share/man/man8/shutdown.8
+	rm debian/systemd/usr/share/man/man8/telinit.8
+	rm debian/systemd/usr/share/man/man8/runlevel.8
+	# files shipped by libpam-systemd
+	rm debian/systemd/usr/share/man/man8/pam_systemd.8
+	# files shipped by udev
+	rm debian/systemd/lib/systemd/system/systemd-udev*
+	rm debian/systemd/lib/systemd/system/*.target.wants/systemd-udev*
+	rm debian/systemd/lib/systemd/systemd-udevd
+	rm debian/systemd/usr/share/man/man7/udev.7
+	rm debian/systemd/usr/share/man/man8/*udev*.8
+	# files systemd by cryptsetup
+	rm debian/systemd/usr/share/man/man5/crypttab.5
+	# files shipped by systemd-services
+	rm debian/systemd/etc/systemd/logind.conf
+	rm debian/systemd/lib/systemd/systemd-logind
+	rm debian/systemd/lib/systemd/systemd-hostnamed
+	rm debian/systemd/lib/systemd/systemd-localed
+	rm debian/systemd/lib/systemd/systemd-timedated
+	rm debian/systemd/usr/share/man/man5/logind*
+	rm debian/systemd/usr/share/man/man8/systemd-logind*
+	rm debian/systemd/usr/share/man/man8/systemd-hostnamed*
+	rm debian/systemd/usr/share/man/man8/systemd-localed*
+	rm debian/systemd/usr/share/man/man8/systemd-timedated*
+	rm debian/udev/lib/udev/rules.d/70-uaccess.rules
+	rm debian/udev/lib/udev/rules.d/73-seat-late.rules
+	rm debian/udev/lib/udev/rules.d/71-seat.rules
+	# files shipped by systemd
+	rm debian/udev/lib/udev/rules.d/99-systemd.rules
+
+	# we continue to use the old net iface naming schema for the time being
+	rm debian/udev/lib/udev/rules.d/80-net-name-slot.rules
+	rm debian/udev-udeb/lib/udev/rules.d/80-net-name-slot.rules
+
+override_dh_makeshlibs:
+	dh_makeshlibs -plibudev1 --add-udeb=libudev1-udeb
+	dh_makeshlibs --remaining-packages
+
+override_dh_installinit:
+	dh_installinit --upstart-only --no-start
+	dh_installinit --upstart-only --name=udev-finish --no-start
+	dh_installinit --upstart-only --name=udevtrigger --no-start
+	dh_installinit --upstart-only --name=udevmonitor --no-start
+	dh_installinit --upstart-only --name=udev-fallback-graphics --no-start
+	dh_installinit --upstart-only --name systemd-logind --no-start
+
+autoreconf:
+	cp -f /usr/share/gtk-doc/data/gtk-doc.make docs/
+	intltoolize -f -c
+	autoreconf -f -i
+
+override_dh_autoreconf:
+	dh_autoreconf debian/rules -- autoreconf
+
+override_dh_auto_test:
+	# some tests hang under fakeroot, so disable fakeroot
+	echo "01234567890123456789012345678901" > debian/build/machine-id
+	env -u LD_PRELOAD SYSTEMD_MACHINE_ID_PATH=$(CURDIR)/debian/build/machine-id \
+		make -C debian/build/deb check || ( \
+		cd debian/build/deb; \
+		for f in test-*.log; do echo "==== $$f ===="; cat $$f; done; \
+		exit 1; )
+
+%:
+	dh $@ --with autoreconf,gir,python2
+
+override_dh_gencontrol:
+ifeq ($(shell dpkg-vendor --derives-from Ubuntu && echo ubuntu),ubuntu)
+	# Ubuntu has an epoch on gudev
+	dh_gencontrol -plibgudev-1.0-0 -plibgudev-1.0-dev -- "-v1:$(VERSION)"
+	dh_gencontrol $(BINARY_BLACKLIST) --remaining-packages
+else
+	dh_gencontrol $(BINARY_BLACKLIST)
+endif
+
+override_dh_strip:
+	dh_strip $(BINARY_BLACKLIST)
+
+override_dh_builddeb:
+	dh_builddeb $(BINARY_BLACKLIST)

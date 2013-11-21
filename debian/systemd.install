@@ -1,0 +1,56 @@
+etc/dbus-1/system.d/org.freedesktop.systemd1.conf
+etc/systemd
+etc/xdg
+etc/modules-load.d
+bin/systemctl
+bin/journalctl
+bin/systemd-notify
+bin/systemd-tty-ask-password-agent
+bin/systemd-ask-password
+bin/systemd-machine-id-setup
+bin/systemd-tmpfiles
+bin/systemd-inhibit
+#usr/bin/kernel-install
+lib/systemd/
+lib/udev/rules.d/99-systemd.rules
+usr/bin/systemd-cgls
+usr/bin/systemd-cgtop
+usr/bin/systemd-nspawn
+usr/bin/systemd-stdio-bridge
+usr/bin/systemd-analyze
+usr/bin/systemd-cat
+usr/bin/systemd-detect-virt
+usr/bin/systemd-delta
+usr/share/man/man1/system*.1
+usr/share/man/man1/journalctl.1
+usr/share/man/man1/init.1
+usr/share/man/man3/
+usr/share/man/man5/
+usr/share/man/man7/
+usr/share/man/man8/
+usr/share/bash-completion/completions/systemctl
+usr/share/bash-completion/completions/journalctl
+usr/share/dbus-1/interfaces/org.freedesktop.systemd1.*
+usr/share/dbus-1/services/
+usr/share/dbus-1/system-services/org.freedesktop.systemd1.service
+usr/share/doc/
+usr/share/pkgconfig/systemd.pc
+usr/share/polkit-1/actions/org.freedesktop.systemd1.policy
+usr/share/systemd/kbd-model-map
+usr/lib/binfmt.d/
+usr/lib/modules-load.d/
+usr/lib/sysctl.d/
+usr/lib/systemd/
+usr/lib/tmpfiles.d/
+
+# installed via debian/rules
+#debian/init-functions.d/40-systemd /lib/lsb/init-functions.d
+#debian/debian-fixup lib/systemd/
+#debian/debian-fixup.service lib/systemd/system
+#debian/tmpfiles.d/debian.conf usr/lib/tmpfiles.d
+#debian/ifup@.service lib/systemd/system
+#debian/units/run-lock.mount lib/systemd/system/
+#debian/units/run-user.mount lib/systemd/system/
+#debian/unit.blacklist usr/share/systemd/
+#debian/debian-enable-units lib/systemd/
+#debian/debian-enable-units.service lib/systemd/system/

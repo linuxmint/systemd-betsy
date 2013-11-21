@@ -1,0 +1,40 @@
+From 237e0f62065760fc0acf5f379457f6715cee6784 Mon Sep 17 00:00:00 2001
+From: Martin Pitt <martinpitt@gnome.org>
+Date: Fri, 15 Mar 2013 08:27:43 +0100
+Subject: [PATCH] Add env variable for machine ID path
+
+During package build, in minimal chroots, or other systems which do not already
+have an /etc/machine-id we get six test failures. Introduce a
+$SYSTEMD_MACHINE_ID_PATH environment variable which can specify a location
+other than /etc/machine-id, so that the unit tests are independent from the
+environment.
+
+https://bugs.freedesktop.org/show_bug.cgi?id=62344
+---
+ src/libsystemd-id128/sd-id128.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+Index: systemd/src/libsystemd-id128/sd-id128.c
+===================================================================
+--- systemd.orig/src/libsystemd-id128/sd-id128.c	2013-07-05 08:20:51.769243811 +0200
++++ systemd/src/libsystemd-id128/sd-id128.c	2013-07-05 08:20:51.765243810 +0200
+@@ -115,6 +115,7 @@
+         ssize_t k;
+         unsigned j;
+         sd_id128_t t;
++        const char *machine_id_path;
+ 
+         if (!ret)
+                 return -EINVAL;
+@@ -124,7 +125,10 @@
+                 return 0;
+         }
+ 
+-        fd = open("/etc/machine-id", O_RDONLY|O_CLOEXEC|O_NOCTTY);
++        machine_id_path = getenv("SYSTEMD_MACHINE_ID_PATH");
++        if (machine_id_path == NULL)
++                machine_id_path = "/etc/machine-id";
++        fd = open(machine_id_path, O_RDONLY|O_CLOEXEC|O_NOCTTY);
+         if (fd < 0)
+                 return -errno;
+ 

@@ -1,0 +1,17 @@
+Description: Load the fbcon driver when a framebuffer is created.
+Author: Scott James Remnant <scott@ubuntu.com>
+Bug-Ubuntu: https://launchpad.net/bugs/392039
+Bug-Ubuntu: https://launchpad.net/bugs/431812
+
+Index: systemd/rules/80-drivers.rules
+===================================================================
+--- systemd.orig/rules/80-drivers.rules	2013-05-10 11:16:41.933296547 +0200
++++ systemd/rules/80-drivers.rules	2013-05-10 11:17:06.949297579 +0200
+@@ -9,6 +9,7 @@
+ SUBSYSTEM=="i2o", RUN{builtin}="kmod load i2o_block"
+ SUBSYSTEM=="module", KERNEL=="parport_pc", RUN{builtin}="kmod load ppdev"
+ SUBSYSTEM=="serio", ENV{MODALIAS}=="?*", RUN{builtin}="kmod load $env{MODALIAS}"
++SUBSYSTEM=="graphics", RUN{builtin}="kmod load fbcon"
+ KERNEL=="mtd*ro", ENV{MTD_FTL}=="smartmedia", RUN{builtin}="kmod load sm_ftl"
+ 
+ LABEL="drivers_end"

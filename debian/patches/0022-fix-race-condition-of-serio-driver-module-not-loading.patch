@@ -1,0 +1,16 @@
+Author: Eric Miao <eric.miao@canonical.com>
+Description: Fix a race condition at boot with serio devices
+Bug-Ubuntu: https://bugs.launchpad.net/bugs/1014460
+
+Index: systemd/rules/80-drivers.rules
+===================================================================
+--- systemd.orig/rules/80-drivers.rules	2013-03-20 22:58:40.126281337 +0100
++++ systemd/rules/80-drivers.rules	2013-05-10 11:02:28.505261354 +0200
+@@ -8,6 +8,7 @@
+ SUBSYSTEM=="memstick", RUN{builtin}="kmod load ms_block mspro_block"
+ SUBSYSTEM=="i2o", RUN{builtin}="kmod load i2o_block"
+ SUBSYSTEM=="module", KERNEL=="parport_pc", RUN{builtin}="kmod load ppdev"
++SUBSYSTEM=="serio", ENV{MODALIAS}=="?*", RUN{builtin}="kmod load $env{MODALIAS}"
+ KERNEL=="mtd*ro", ENV{MTD_FTL}=="smartmedia", RUN{builtin}="kmod load sm_ftl"
+ 
+ LABEL="drivers_end"
