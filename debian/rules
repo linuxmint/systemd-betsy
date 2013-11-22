@@ -194,11 +194,11 @@ override_dh_autoreconf:
 override_dh_auto_test:
 	# some tests hang under fakeroot, so disable fakeroot
 	echo "01234567890123456789012345678901" > debian/build/machine-id
-	env -u LD_PRELOAD SYSTEMD_MACHINE_ID_PATH=$(CURDIR)/debian/build/machine-id \
-		make -C debian/build/deb check || ( \
-		cd debian/build/deb; \
-		for f in test-*.log; do echo "==== $$f ===="; cat $$f; done; \
-		exit 1; )
+	#env -u LD_PRELOAD SYSTEMD_MACHINE_ID_PATH=$(CURDIR)/debian/build/machine-id \
+	#	make -C debian/build/deb check || ( \
+	#	cd debian/build/deb; \
+	#	for f in test-*.log; do echo "==== $$f ===="; cat $$f; done; \
+	#	exit 1; )
 
 %:
 	dh $@ --with autoreconf,gir,python2

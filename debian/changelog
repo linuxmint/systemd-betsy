@@ -1,3 +1,9 @@
+systemd (204-1linuxmint1) petra; urgency=low
+
+  * Added pam-check-runtime-dir-user.patch https://bugs.launchpad.net/ubuntu/+source/pulseaudio/+bug/1197395 https://bugzilla.redhat.com/show_bug.cgi?id=753882
+
+ -- Clement Lefebvre <root@linuxmint.com>  Thu, 21 Nov 2013 15:09:21 +0000
+
 systemd (204-0ubuntu19) saucy; urgency=low
 
   * Add 0031-ignore-omap-vsync.patch: Gross, but effective hack to ignore

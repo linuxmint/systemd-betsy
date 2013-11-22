@@ -26,3 +26,4 @@
 0029-Support-phablet-etc-writable.patch
 0030-revert-removal-of-rename_netif-functionality.patch
 0031-ignore-omap-vsync.patch
+pam-check-runtime-dir-user.patch
