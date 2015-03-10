@@ -20,26 +20,51 @@
 ***/
 
 #include <errno.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/epoll.h>
 #include <fcntl.h>
+#include <linux/vt.h>
+#include <linux/kd.h>
+#include <signal.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
-#include "systemd/sd-id128.h"
-#include "systemd/sd-messages.h"
+#include "sd-id128.h"
+#include "sd-messages.h"
 #include "strv.h"
 #include "util.h"
 #include "mkdir.h"
 #include "path-util.h"
-#include "cgroup-util.h"
-#include "logind-session.h"
 #include "fileio.h"
+#include "audit.h"
+#include "bus-util.h"
+#include "bus-error.h"
+#include "logind-session.h"
 
-Session* session_new(Manager *m, User *u, const char *id) {
+#define RELEASE_USEC (20*USEC_PER_SEC)
+
+static void session_remove_fifo(Session *s);
+
+static unsigned long devt_hash_func(const void *p, const uint8_t hash_key[HASH_KEY_SIZE]) {
+        uint64_t u = *(const dev_t*)p;
+
+        return uint64_hash_func(&u, hash_key);
+}
+
+static int devt_compare_func(const void *_a, const void *_b) {
+        dev_t a, b;
+
+        a = *(const dev_t*) _a;
+        b = *(const dev_t*) _b;
+
+        return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+Session* session_new(Manager *m, const char *id) {
         Session *s;
 
         assert(m);
         assert(id);
+        assert(session_id_valid(id));
 
         s = new0(Session, 1);
         if (!s)
@@ -51,9 +76,17 @@ Session* session_new(Manager *m, User *u, const char *id) {
                 return NULL;
         }
 
-        s->id = path_get_file_name(s->state_file);
+        s->devices = hashmap_new(devt_hash_func, devt_compare_func);
+        if (!s->devices) {
+                free(s->state_file);
+                free(s);
+                return NULL;
+        }
+
+        s->id = basename(s->state_file);
 
         if (hashmap_put(m->sessions, s->id, s) < 0) {
+                hashmap_free(s->devices);
                 free(s->state_file);
                 free(s);
                 return NULL;
@@ -61,21 +94,32 @@ Session* session_new(Manager *m, User *u, const char *id) {
 
         s->manager = m;
         s->fifo_fd = -1;
-        s->user = u;
-
-        LIST_PREPEND(Session, sessions_by_user, u->sessions, s);
+        s->vtfd = -1;
 
         return s;
 }
 
 void session_free(Session *s) {
+        SessionDevice *sd;
+
         assert(s);
 
         if (s->in_gc_queue)
-                LIST_REMOVE(Session, gc_queue, s->manager->session_gc_queue, s);
+                LIST_REMOVE(gc_queue, s->manager->session_gc_queue, s);
+
+        s->timer_event_source = sd_event_source_unref(s->timer_event_source);
+
+        session_remove_fifo(s);
+
+        session_drop_controller(s);
+
+        while ((sd = hashmap_first(s->devices)))
+                session_device_free(sd);
+
+        hashmap_free(s->devices);
 
         if (s->user) {
-                LIST_REMOVE(Session, sessions_by_user, s->user->sessions, s);
+                LIST_REMOVE(sessions_by_user, s->user->sessions, s);
 
                 if (s->user->display == s)
                         s->user->display = NULL;
@@ -84,35 +128,54 @@ void session_free(Session *s) {
         if (s->seat) {
                 if (s->seat->active == s)
                         s->seat->active = NULL;
+                if (s->seat->pending_switch == s)
+                        s->seat->pending_switch = NULL;
 
-                LIST_REMOVE(Session, sessions_by_seat, s->seat->sessions, s);
+                seat_evict_position(s->seat, s);
+                LIST_REMOVE(sessions_by_seat, s->seat->sessions, s);
         }
 
-        if (s->cgroup_path)
-                hashmap_remove(s->manager->session_cgroups, s->cgroup_path);
+        if (s->scope) {
+                hashmap_remove(s->manager->session_units, s->scope);
+                free(s->scope);
+        }
 
-        free(s->cgroup_path);
-        strv_free(s->controllers);
+        free(s->scope_job);
+
+        sd_bus_message_unref(s->create_message);
 
         free(s->tty);
         free(s->display);
         free(s->remote_host);
         free(s->remote_user);
         free(s->service);
+        free(s->desktop);
 
         hashmap_remove(s->manager->sessions, s->id);
-        session_remove_fifo(s);
+
+        s->vt_source = sd_event_source_unref(s->vt_source);
 
         free(s->state_file);
         free(s);
 }
 
+void session_set_user(Session *s, User *u) {
+        assert(s);
+        assert(!s->user);
+
+        s->user = u;
+        LIST_PREPEND(sessions_by_user, u->sessions, s);
+}
+
 int session_save(Session *s) {
-        FILE *f;
+        _cleanup_free_ char *temp_path = NULL;
+        _cleanup_fclose_ FILE *f = NULL;
         int r = 0;
-        char *temp_path;
 
         assert(s);
+
+        if (!s->user)
+                return -ESTALE;
 
         if (!s->started)
                 return 0;
@@ -131,83 +194,110 @@ int session_save(Session *s) {
 
         fprintf(f,
                 "# This is private data. Do not parse.\n"
-                "UID=%lu\n"
+                "UID="UID_FMT"\n"
                 "USER=%s\n"
                 "ACTIVE=%i\n"
                 "STATE=%s\n"
-                "REMOTE=%i\n"
-                "KILL_PROCESSES=%i\n",
-                (unsigned long) s->user->uid,
+                "REMOTE=%i\n",
+                s->user->uid,
                 s->user->name,
                 session_is_active(s),
                 session_state_to_string(session_get_state(s)),
-                s->remote,
-                s->kill_processes);
+                s->remote);
 
         if (s->type >= 0)
-                fprintf(f,
-                        "TYPE=%s\n",
-                        session_type_to_string(s->type));
+                fprintf(f, "TYPE=%s\n", session_type_to_string(s->type));
 
         if (s->class >= 0)
-                fprintf(f,
-                        "CLASS=%s\n",
-                        session_class_to_string(s->class));
+                fprintf(f, "CLASS=%s\n", session_class_to_string(s->class));
 
-        if (s->cgroup_path)
-                fprintf(f,
-                        "CGROUP=%s\n",
-                        s->cgroup_path);
+        if (s->scope)
+                fprintf(f, "SCOPE=%s\n", s->scope);
+        if (s->scope_job)
+                fprintf(f, "SCOPE_JOB=%s\n", s->scope_job);
 
         if (s->fifo_path)
-                fprintf(f,
-                        "FIFO=%s\n",
-                        s->fifo_path);
+                fprintf(f, "FIFO=%s\n", s->fifo_path);
 
         if (s->seat)
-                fprintf(f,
-                        "SEAT=%s\n",
-                        s->seat->id);
+                fprintf(f, "SEAT=%s\n", s->seat->id);
 
         if (s->tty)
-                fprintf(f,
-                        "TTY=%s\n",
-                        s->tty);
+                fprintf(f, "TTY=%s\n", s->tty);
 
         if (s->display)
-                fprintf(f,
-                        "DISPLAY=%s\n",
-                        s->display);
+                fprintf(f, "DISPLAY=%s\n", s->display);
 
-        if (s->remote_host)
-                fprintf(f,
-                        "REMOTE_HOST=%s\n",
-                        s->remote_host);
+        if (s->remote_host) {
+                _cleanup_free_ char *escaped;
 
-        if (s->remote_user)
-                fprintf(f,
-                        "REMOTE_USER=%s\n",
-                        s->remote_user);
+                escaped = cescape(s->remote_host);
+                if (!escaped) {
+                        r = -ENOMEM;
+                        goto finish;
+                }
 
-        if (s->service)
-                fprintf(f,
-                        "SERVICE=%s\n",
-                        s->service);
+                fprintf(f, "REMOTE_HOST=%s\n", escaped);
+        }
 
-        if (s->seat && seat_can_multi_session(s->seat))
-                fprintf(f,
-                        "VTNR=%i\n",
-                        s->vtnr);
+        if (s->remote_user) {
+                _cleanup_free_ char *escaped;
+
+                escaped = cescape(s->remote_user);
+                if (!escaped) {
+                        r = -ENOMEM;
+                        goto finish;
+                }
+
+                fprintf(f, "REMOTE_USER=%s\n", escaped);
+        }
+
+        if (s->service) {
+                _cleanup_free_ char *escaped;
+
+                escaped = cescape(s->service);
+                if (!escaped) {
+                        r = -ENOMEM;
+                        goto finish;
+                }
+
+                fprintf(f, "SERVICE=%s\n", escaped);
+        }
+
+        if (s->desktop) {
+                _cleanup_free_ char *escaped;
+
+
+                escaped = cescape(s->desktop);
+                if (!escaped) {
+                        r = -ENOMEM;
+                        goto finish;
+                }
+
+                fprintf(f, "DESKTOP=%s\n", escaped);
+        }
+
+        if (s->seat && seat_has_vts(s->seat))
+                fprintf(f, "VTNR=%u\n", s->vtnr);
+
+        if (!s->vtnr)
+                fprintf(f, "POS=%u\n", s->pos);
 
         if (s->leader > 0)
-                fprintf(f,
-                        "LEADER=%lu\n",
-                        (unsigned long) s->leader);
+                fprintf(f, "LEADER="PID_FMT"\n", s->leader);
 
         if (s->audit_id > 0)
+                fprintf(f, "AUDIT=%"PRIu32"\n", s->audit_id);
+
+        if (dual_timestamp_is_set(&s->timestamp))
                 fprintf(f,
-                        "AUDIT=%llu\n",
-                        (unsigned long long) s->audit_id);
+                        "REALTIME="USEC_FMT"\n"
+                        "MONOTONIC="USEC_FMT"\n",
+                        s->timestamp.realtime,
+                        s->timestamp.monotonic);
+
+        if (s->controller)
+                fprintf(f, "CONTROLLER=%s\n", s->controller);
 
         fflush(f);
 
@@ -217,25 +307,26 @@ int session_save(Session *s) {
                 unlink(temp_path);
         }
 
-        fclose(f);
-        free(temp_path);
-
 finish:
         if (r < 0)
-                log_error("Failed to save session data for %s: %s", s->id, strerror(-r));
+                log_error("Failed to save session data %s: %s", s->state_file, strerror(-r));
 
         return r;
 }
 
 int session_load(Session *s) {
-        char *remote = NULL,
-                *kill_processes = NULL,
+        _cleanup_free_ char *remote = NULL,
                 *seat = NULL,
                 *vtnr = NULL,
+                *state = NULL,
+                *pos = NULL,
                 *leader = NULL,
-                *audit_id = NULL,
                 *type = NULL,
-                *class = NULL;
+                *class = NULL,
+                *uid = NULL,
+                *realtime = NULL,
+                *monotonic = NULL,
+                *controller = NULL;
 
         int k, r;
 
@@ -243,8 +334,8 @@ int session_load(Session *s) {
 
         r = parse_env_file(s->state_file, NEWLINE,
                            "REMOTE",         &remote,
-                           "KILL_PROCESSES", &kill_processes,
-                           "CGROUP",         &s->cgroup_path,
+                           "SCOPE",          &s->scope,
+                           "SCOPE_JOB",      &s->scope_job,
                            "FIFO",           &s->fifo_path,
                            "SEAT",           &seat,
                            "TTY",            &s->tty,
@@ -252,14 +343,47 @@ int session_load(Session *s) {
                            "REMOTE_HOST",    &s->remote_host,
                            "REMOTE_USER",    &s->remote_user,
                            "SERVICE",        &s->service,
+                           "DESKTOP",        &s->desktop,
                            "VTNR",           &vtnr,
+                           "STATE",          &state,
+                           "POS",            &pos,
                            "LEADER",         &leader,
                            "TYPE",           &type,
                            "CLASS",          &class,
+                           "UID",            &uid,
+                           "REALTIME",       &realtime,
+                           "MONOTONIC",      &monotonic,
+                           "CONTROLLER",     &controller,
                            NULL);
 
-        if (r < 0)
-                goto finish;
+        if (r < 0) {
+                log_error("Failed to read %s: %s", s->state_file, strerror(-r));
+                return r;
+        }
+
+        if (!s->user) {
+                uid_t u;
+                User *user;
+
+                if (!uid) {
+                        log_error("UID not specified for session %s", s->id);
+                        return -ENOENT;
+                }
+
+                r = parse_uid(uid, &u);
+                if (r < 0)  {
+                        log_error("Failed to parse UID value %s for session %s.", uid, s->id);
+                        return r;
+                }
+
+                user = hashmap_get(s->manager->users, ULONG_TO_PTR((unsigned long) u));
+                if (!user) {
+                        log_error("User of session %s not known.", s->id);
+                        return -ENOENT;
+                }
+
+                session_set_user(s, user);
+        }
 
         if (remote) {
                 k = parse_boolean(remote);
@@ -267,26 +391,27 @@ int session_load(Session *s) {
                         s->remote = k;
         }
 
-        if (kill_processes) {
-                k = parse_boolean(kill_processes);
-                if (k >= 0)
-                        s->kill_processes = k;
-        }
+        if (vtnr)
+                safe_atou(vtnr, &s->vtnr);
 
         if (seat && !s->seat) {
                 Seat *o;
 
                 o = hashmap_get(s->manager->seats, seat);
                 if (o)
-                        seat_attach_session(o, s);
+                        r = seat_attach_session(o, s);
+                if (!o || r < 0)
+                        log_error("Cannot attach session %s to seat %s", s->id, seat);
         }
 
-        if (vtnr && s->seat && seat_can_multi_session(s->seat)) {
-                int v;
+        if (!s->seat || !seat_has_vts(s->seat))
+                s->vtnr = 0;
 
-                k = safe_atoi(vtnr, &v);
-                if (k >= 0 && v >= 1)
-                        s->vtnr = v;
+        if (pos && s->seat) {
+                unsigned int npos;
+
+                safe_atou(pos, &npos);
+                seat_claim_position(s->seat, s, npos);
         }
 
         if (leader) {
@@ -311,38 +436,50 @@ int session_load(Session *s) {
                         s->class = c;
         }
 
+        if (state && streq(state, "closing"))
+                s->stopping = true;
+
         if (s->fifo_path) {
                 int fd;
 
                 /* If we open an unopened pipe for reading we will not
                    get an EOF. to trigger an EOF we hence open it for
-                   reading, but close it right-away which then will
-                   trigger the EOF. */
+                   writing, but close it right away which then will
+                   trigger the EOF. This will happen immediately if no
+                   other process has the FIFO open for writing, i. e.
+                   when the session died before logind (re)started. */
 
                 fd = session_create_fifo(s);
-                if (fd >= 0)
-                        close_nointr_nofail(fd);
+                safe_close(fd);
         }
 
-finish:
-        free(remote);
-        free(kill_processes);
-        free(seat);
-        free(vtnr);
-        free(leader);
-        free(audit_id);
-        free(class);
+        if (realtime) {
+                unsigned long long l;
+                if (sscanf(realtime, "%llu", &l) > 0)
+                        s->timestamp.realtime = l;
+        }
+
+        if (monotonic) {
+                unsigned long long l;
+                if (sscanf(monotonic, "%llu", &l) > 0)
+                        s->timestamp.monotonic = l;
+        }
+
+        if (controller) {
+                if (bus_name_has_owner(s->manager->bus, controller, NULL) > 0)
+                        session_set_controller(s, controller, false);
+                else
+                        session_restore_vt(s);
+        }
 
         return r;
 }
 
 int session_activate(Session *s) {
-        int r;
+        unsigned int num_pending;
 
         assert(s);
-
-        if (s->vtnr < 0)
-                return -ENOTSUP;
+        assert(s->user);
 
         if (!s->seat)
                 return -ENOTSUP;
@@ -350,194 +487,67 @@ int session_activate(Session *s) {
         if (s->seat->active == s)
                 return 0;
 
-        assert(seat_is_vtconsole(s->seat));
+        /* on seats with VTs, we let VTs manage session-switching */
+        if (seat_has_vts(s->seat)) {
+                if (!s->vtnr)
+                        return -ENOTSUP;
 
-        r = chvt(s->vtnr);
-        if (r < 0)
-                return r;
-
-        return seat_set_active(s->seat, s);
-}
-
-static int session_link_x11_socket(Session *s) {
-        char *t, *f, *c;
-        size_t k;
-
-        assert(s);
-        assert(s->user);
-        assert(s->user->runtime_path);
-
-        if (s->user->display)
-                return 0;
-
-        if (!s->display || !display_is_local(s->display))
-                return 0;
-
-        k = strspn(s->display+1, "0123456789");
-        f = new(char, sizeof("/tmp/.X11-unix/X") + k);
-        if (!f)
-                return log_oom();
-
-        c = stpcpy(f, "/tmp/.X11-unix/X");
-        memcpy(c, s->display+1, k);
-        c[k] = 0;
-
-        if (access(f, F_OK) < 0) {
-                log_warning("Session %s has display %s with non-existing socket %s.", s->id, s->display, f);
-                free(f);
-                return -ENOENT;
+                return chvt(s->vtnr);
         }
 
-        /* Note that this cannot be in a subdir to avoid
-         * vulnerabilities since we are privileged but the runtime
-         * path is owned by the user */
+        /* On seats without VTs, we implement session-switching in logind. We
+         * try to pause all session-devices and wait until the session
+         * controller acknowledged them. Once all devices are asleep, we simply
+         * switch the active session and be done.
+         * We save the session we want to switch to in seat->pending_switch and
+         * seat_complete_switch() will perform the final switch. */
 
-        t = strappend(s->user->runtime_path, "/X11-display");
-        if (!t) {
-                free(f);
-                return log_oom();
-        }
+        s->seat->pending_switch = s;
 
-        if (link(f, t) < 0) {
-                if (errno == EEXIST) {
-                        unlink(t);
-
-                        if (link(f, t) >= 0)
-                                goto done;
-                }
-
-                if (symlink(f, t) < 0) {
-
-                        if (errno == EEXIST) {
-                                unlink(t);
-
-                                if (symlink(f, t) >= 0)
-                                        goto done;
-                        }
-
-                        log_error("Failed to link %s to %s: %m", f, t);
-                        free(f);
-                        free(t);
-                        return -errno;
-                }
-        }
-
-done:
-        log_info("Linked %s to %s.", f, t);
-        free(f);
-        free(t);
-
-        s->user->display = s;
+        /* if no devices are running, immediately perform the session switch */
+        num_pending = session_device_try_pause_all(s);
+        if (!num_pending)
+                seat_complete_switch(s->seat);
 
         return 0;
 }
 
-static int session_create_one_group(Session *s, const char *controller, const char *path) {
-        int r;
-
-        assert(s);
-        assert(path);
-
-        if (s->leader > 0) {
-                r = cg_create_and_attach(controller, path, s->leader);
-                if (r < 0)
-                        r = cg_create(controller, path, NULL);
-        } else
-                r = cg_create(controller, path, NULL);
-
-        if (r < 0)
-                return r;
-
-        r = cg_set_task_access(controller, path, 0644, s->user->uid, s->user->gid, -1);
-        if (r >= 0)
-                r = cg_set_group_access(controller, path, 0755, s->user->uid, s->user->gid);
-
-        return r;
-}
-
-static int session_create_cgroup(Session *s) {
-        char **k;
-        char *p;
+static int session_start_scope(Session *s) {
         int r;
 
         assert(s);
         assert(s->user);
-        assert(s->user->cgroup_path);
+        assert(s->user->slice);
 
-        if (!s->cgroup_path) {
-                _cleanup_free_ char *name = NULL, *escaped = NULL;
+        if (!s->scope) {
+                _cleanup_bus_error_free_ sd_bus_error error = SD_BUS_ERROR_NULL;
+                _cleanup_free_ char *description = NULL;
+                char *scope, *job = NULL;
 
-                name = strappend(s->id, ".session");
-                if (!name)
+                description = strjoin("Session ", s->id, " of user ", s->user->name, NULL);
+                if (!description)
                         return log_oom();
 
-                escaped = cg_escape(name);
-                if (!escaped)
+                scope = strjoin("session-", s->id, ".scope", NULL);
+                if (!scope)
                         return log_oom();
 
-                p = strjoin(s->user->cgroup_path, "/", escaped, NULL);
-                if (!p)
-                        return log_oom();
-        } else
-                p = s->cgroup_path;
+                r = manager_start_scope(s->manager, scope, s->leader, s->user->slice, description, "systemd-logind.service", "systemd-user-sessions.service", &error, &job);
+                if (r < 0) {
+                        log_error("Failed to start session scope %s: %s %s",
+                                  scope, bus_error_message(&error, r), error.name);
+                        free(scope);
+                        return r;
+                } else {
+                        s->scope = scope;
 
-        r = session_create_one_group(s, SYSTEMD_CGROUP_CONTROLLER, p);
-        if (r < 0) {
-                log_error("Failed to create "SYSTEMD_CGROUP_CONTROLLER":%s: %s", p, strerror(-r));
-                free(p);
-                s->cgroup_path = NULL;
-                return r;
-        }
-
-        s->cgroup_path = p;
-
-        STRV_FOREACH(k, s->controllers) {
-
-                if (strv_contains(s->reset_controllers, *k))
-                        continue;
-
-                r = session_create_one_group(s, *k, p);
-                if (r < 0)
-                        log_warning("Failed to create %s:%s: %s", *k, p, strerror(-r));
-        }
-
-        STRV_FOREACH(k, s->manager->controllers) {
-
-                if (strv_contains(s->reset_controllers, *k) ||
-                    strv_contains(s->manager->reset_controllers, *k) ||
-                    strv_contains(s->controllers, *k))
-                        continue;
-
-                r = session_create_one_group(s, *k, p);
-                if (r < 0)
-                        log_warning("Failed to create %s:%s: %s", *k, p, strerror(-r));
-        }
-
-        if (s->leader > 0) {
-
-                STRV_FOREACH(k, s->reset_controllers) {
-                        r = cg_attach(*k, "/", s->leader);
-                        if (r < 0)
-                                log_warning("Failed to reset controller %s: %s", *k, strerror(-r));
-
-                }
-
-                STRV_FOREACH(k, s->manager->reset_controllers) {
-
-                        if (strv_contains(s->reset_controllers, *k) ||
-                            strv_contains(s->controllers, *k))
-                                continue;
-
-                        r = cg_attach(*k, "/", s->leader);
-                        if (r < 0)
-                                log_warning("Failed to reset controller %s: %s", *k, strerror(-r));
-
+                        free(s->scope_job);
+                        s->scope_job = job;
                 }
         }
 
-        r = hashmap_put(s->manager->session_cgroups, s->cgroup_path, s);
-        if (r < 0)
-                log_warning("Failed to create mapping between cgroup and session");
+        if (s->scope)
+                hashmap_put(s->manager->session_units, s->scope, s);
 
         return 0;
 }
@@ -546,7 +556,9 @@ int session_start(Session *s) {
         int r;
 
         assert(s);
-        assert(s->user);
+
+        if (!s->user)
+                return -ESTALE;
 
         if (s->started)
                 return 0;
@@ -555,185 +567,173 @@ int session_start(Session *s) {
         if (r < 0)
                 return r;
 
-        log_struct(s->type == SESSION_TTY || s->type == SESSION_X11 ? LOG_INFO : LOG_DEBUG,
-                   MESSAGE_ID(SD_MESSAGE_SESSION_START),
-                   "SESSION_ID=%s", s->id,
-                   "USER_ID=%s", s->user->name,
-                   "LEADER=%lu", (unsigned long) s->leader,
-                   "MESSAGE=New session %s of user %s.", s->id, s->user->name,
-                   NULL);
-
         /* Create cgroup */
-        r = session_create_cgroup(s);
+        r = session_start_scope(s);
         if (r < 0)
                 return r;
 
-        /* Create X11 symlink */
-        session_link_x11_socket(s);
+        log_struct(s->class == SESSION_BACKGROUND ? LOG_DEBUG : LOG_INFO,
+                   MESSAGE_ID(SD_MESSAGE_SESSION_START),
+                   "SESSION_ID=%s", s->id,
+                   "USER_ID=%s", s->user->name,
+                   "LEADER="PID_FMT, s->leader,
+                   "MESSAGE=New session %s of user %s.", s->id, s->user->name,
+                   NULL);
 
-        dual_timestamp_get(&s->timestamp);
+        if (!dual_timestamp_is_set(&s->timestamp))
+                dual_timestamp_get(&s->timestamp);
 
         if (s->seat)
                 seat_read_active_vt(s->seat);
 
         s->started = true;
 
-        /* Save session data */
+        user_elect_display(s->user);
+
+        /* Save data */
+        session_save(s);
+        user_save(s->user);
+        if (s->seat)
+                seat_save(s->seat);
+
+        /* Send signals */
+        session_send_signal(s, true);
+        user_send_changed(s->user, "Sessions", "Display", NULL);
+        if (s->seat) {
+                if (s->seat->active == s)
+                        seat_send_changed(s->seat, "Sessions", "ActiveSession", NULL);
+                else
+                        seat_send_changed(s->seat, "Sessions", NULL);
+        }
+
+        return 0;
+}
+
+static int session_stop_scope(Session *s, bool force) {
+        _cleanup_bus_error_free_ sd_bus_error error = SD_BUS_ERROR_NULL;
+        char *job = NULL;
+        int r;
+
+        assert(s);
+
+        if (!s->scope)
+                return 0;
+
+        if (force || manager_shall_kill(s->manager, s->user->name)) {
+                r = manager_stop_unit(s->manager, s->scope, &error, &job);
+                if (r < 0) {
+                        log_error("Failed to stop session scope: %s", bus_error_message(&error, r));
+                        return r;
+                }
+
+                free(s->scope_job);
+                s->scope_job = job;
+        } else {
+                r = manager_abandon_scope(s->manager, s->scope, &error);
+                if (r < 0) {
+                        log_error("Failed to abandon session scope: %s", bus_error_message(&error, r));
+                        return r;
+                }
+        }
+
+        return 0;
+}
+
+int session_stop(Session *s, bool force) {
+        int r;
+
+        assert(s);
+
+        if (!s->user)
+                return -ESTALE;
+
+        s->timer_event_source = sd_event_source_unref(s->timer_event_source);
+
+        /* We are going down, don't care about FIFOs anymore */
+        session_remove_fifo(s);
+
+        /* Kill cgroup */
+        r = session_stop_scope(s, force);
+
+        s->stopping = true;
+
+        user_elect_display(s->user);
+
         session_save(s);
         user_save(s->user);
 
-        session_send_signal(s, true);
-
-        if (s->seat) {
-                seat_save(s->seat);
-
-                if (s->seat->active == s)
-                        seat_send_changed(s->seat, "Sessions\0ActiveSession\0");
-                else
-                        seat_send_changed(s->seat, "Sessions\0");
-        }
-
-        user_send_changed(s->user, "Sessions\0");
-
-        return 0;
+        return r;
 }
 
-static bool session_shall_kill(Session *s) {
-        assert(s);
-
-        if (!s->kill_processes)
-                return false;
-
-        if (strv_contains(s->manager->kill_exclude_users, s->user->name))
-                return false;
-
-        if (strv_isempty(s->manager->kill_only_users))
-                return true;
-
-        return strv_contains(s->manager->kill_only_users, s->user->name);
-}
-
-static int session_terminate_cgroup(Session *s) {
-        int r;
-        char **k;
+int session_finalize(Session *s) {
+        int r = 0;
+        SessionDevice *sd;
 
         assert(s);
 
-        if (!s->cgroup_path)
-                return 0;
-
-        cg_trim(SYSTEMD_CGROUP_CONTROLLER, s->cgroup_path, false);
-
-        if (session_shall_kill(s)) {
-
-                r = cg_kill_recursive_and_wait(SYSTEMD_CGROUP_CONTROLLER, s->cgroup_path, true);
-                if (r < 0)
-                        log_error("Failed to kill session cgroup: %s", strerror(-r));
-
-        } else {
-                if (s->leader > 0) {
-                        Session *t;
-
-                        /* We still send a HUP to the leader process,
-                         * even if we are not supposed to kill the
-                         * whole cgroup. But let's first check the
-                         * leader still exists and belongs to our
-                         * session... */
-
-                        r = manager_get_session_by_pid(s->manager, s->leader, &t);
-                        if (r > 0 && t == s) {
-                                /*kill(s->leader, SIGTERM); */ /* for normal processes */
-                                kill(s->leader, SIGHUP);  /* for shells */
-                                kill(s->leader, SIGCONT); /* in case they are stopped */
-                        }
-                }
-
-                r = cg_is_empty_recursive(SYSTEMD_CGROUP_CONTROLLER, s->cgroup_path, true);
-                if (r < 0)
-                        log_error("Failed to check session cgroup: %s", strerror(-r));
-                else if (r > 0) {
-                        r = cg_delete(SYSTEMD_CGROUP_CONTROLLER, s->cgroup_path);
-                        if (r < 0)
-                                log_error("Failed to delete session cgroup: %s", strerror(-r));
-                }
-        }
-
-        STRV_FOREACH(k, s->user->manager->controllers)
-                cg_trim(*k, s->cgroup_path, true);
-
-        hashmap_remove(s->manager->session_cgroups, s->cgroup_path);
-
-        free(s->cgroup_path);
-        s->cgroup_path = NULL;
-
-        return 0;
-}
-
-static int session_unlink_x11_socket(Session *s) {
-        char *t;
-        int r;
-
-        assert(s);
-        assert(s->user);
-
-        if (s->user->display != s)
-                return 0;
-
-        s->user->display = NULL;
-
-        t = strappend(s->user->runtime_path, "/X11-display");
-        if (!t)
-                return log_oom();
-
-        r = unlink(t);
-        free(t);
-
-        return r < 0 ? -errno : 0;
-}
-
-int session_stop(Session *s) {
-        int r = 0, k;
-
-        assert(s);
+        if (!s->user)
+                return -ESTALE;
 
         if (s->started)
-                log_struct(s->type == SESSION_TTY || s->type == SESSION_X11 ? LOG_INFO : LOG_DEBUG,
+                log_struct(s->class == SESSION_BACKGROUND ? LOG_DEBUG : LOG_INFO,
                            MESSAGE_ID(SD_MESSAGE_SESSION_STOP),
                            "SESSION_ID=%s", s->id,
                            "USER_ID=%s", s->user->name,
-                           "LEADER=%lu", (unsigned long) s->leader,
+                           "LEADER="PID_FMT, s->leader,
                            "MESSAGE=Removed session %s.", s->id,
                            NULL);
 
-        /* Kill cgroup */
-        k = session_terminate_cgroup(s);
-        if (k < 0)
-                r = k;
+        s->timer_event_source = sd_event_source_unref(s->timer_event_source);
 
-        /* Remove X11 symlink */
-        session_unlink_x11_socket(s);
+        /* Kill session devices */
+        while ((sd = hashmap_first(s->devices)))
+                session_device_free(sd);
 
         unlink(s->state_file);
         session_add_to_gc_queue(s);
         user_add_to_gc_queue(s->user);
 
-        if (s->started)
+        if (s->started) {
                 session_send_signal(s, false);
-
-        s->started = false;
+                s->started = false;
+        }
 
         if (s->seat) {
                 if (s->seat->active == s)
                         seat_set_active(s->seat, NULL);
 
-                seat_send_changed(s->seat, "Sessions\0");
                 seat_save(s->seat);
+                seat_send_changed(s->seat, "Sessions", NULL);
         }
 
-        user_send_changed(s->user, "Sessions\0");
         user_save(s->user);
+        user_send_changed(s->user, "Sessions", "Display", NULL);
 
         return r;
+}
+
+static int release_timeout_callback(sd_event_source *es, uint64_t usec, void *userdata) {
+        Session *s = userdata;
+
+        assert(es);
+        assert(s);
+
+        session_stop(s, false);
+        return 0;
+}
+
+void session_release(Session *s) {
+        assert(s);
+
+        if (!s->started || s->stopping)
+                return;
+
+        if (!s->timer_event_source)
+                sd_event_add_time(s->manager->event,
+                                  &s->timer_event_source,
+                                  CLOCK_MONOTONIC,
+                                  now(CLOCK_MONOTONIC) + RELEASE_USEC, 0,
+                                  release_timeout_callback, s);
 }
 
 bool session_is_active(Session *s) {
@@ -817,28 +817,6 @@ int session_get_idle_hint(Session *s, dual_timestamp *t) {
                         goto found_atime;
         }
 
-        /* For other TTY sessions, let's find the most recent atime of
-         * the ttys of any of the processes of the session */
-        if (s->cgroup_path) {
-                _cleanup_fclose_ FILE *f = NULL;
-
-                if (cg_enumerate_processes(SYSTEMD_CGROUP_CONTROLLER, s->cgroup_path, &f) >= 0) {
-                        pid_t pid;
-
-                        atime = 0;
-                        while (cg_read_pid(f, &pid) > 0) {
-                                usec_t a;
-
-                                if (get_process_ctty_atime(pid, &a) >= 0)
-                                        if (atime == 0 || atime < a)
-                                                atime = a;
-                        }
-
-                        if (atime != 0)
-                                goto found_atime;
-                }
-        }
-
 dont_know:
         if (t)
                 *t = s->idle_hint_timestamp;
@@ -866,26 +844,27 @@ void session_set_idle_hint(Session *s, bool b) {
         s->idle_hint = b;
         dual_timestamp_get(&s->idle_hint_timestamp);
 
-        session_send_changed(s,
-                             "IdleHint\0"
-                             "IdleSinceHint\0"
-                             "IdleSinceHintMonotonic\0");
+        session_send_changed(s, "IdleHint", "IdleSinceHint", "IdleSinceHintMonotonic", NULL);
 
         if (s->seat)
-                seat_send_changed(s->seat,
-                                  "IdleHint\0"
-                                  "IdleSinceHint\0"
-                                  "IdleSinceHintMonotonic\0");
+                seat_send_changed(s->seat, "IdleHint", "IdleSinceHint", "IdleSinceHintMonotonic", NULL);
 
-        user_send_changed(s->user,
-                          "IdleHint\0"
-                          "IdleSinceHint\0"
-                          "IdleSinceHintMonotonic\0");
+        user_send_changed(s->user, "IdleHint", "IdleSinceHint", "IdleSinceHintMonotonic", NULL);
+        manager_send_changed(s->manager, "IdleHint", "IdleSinceHint", "IdleSinceHintMonotonic", NULL);
+}
 
-        manager_send_changed(s->manager,
-                             "IdleHint\0"
-                             "IdleSinceHint\0"
-                             "IdleSinceHintMonotonic\0");
+static int session_dispatch_fifo(sd_event_source *es, int fd, uint32_t revents, void *userdata) {
+        Session *s = userdata;
+
+        assert(s);
+        assert(s->fifo_fd == fd);
+
+        /* EOF on the FIFO means the session died abnormally. */
+
+        session_remove_fifo(s);
+        session_stop(s, false);
+
+        return 1;
 }
 
 int session_create_fifo(Session *s) {
@@ -908,21 +887,20 @@ int session_create_fifo(Session *s) {
 
         /* Open reading side */
         if (s->fifo_fd < 0) {
-                struct epoll_event ev = {};
-
                 s->fifo_fd = open(s->fifo_path, O_RDONLY|O_CLOEXEC|O_NDELAY);
                 if (s->fifo_fd < 0)
                         return -errno;
 
-                r = hashmap_put(s->manager->session_fds, INT_TO_PTR(s->fifo_fd + 1), s);
+        }
+
+        if (!s->fifo_event_source) {
+                r = sd_event_add_io(s->manager->event, &s->fifo_event_source, s->fifo_fd, 0, session_dispatch_fifo, s);
                 if (r < 0)
                         return r;
 
-                ev.events = 0;
-                ev.data.u32 = FD_OTHER_BASE + s->fifo_fd;
-
-                if (epoll_ctl(s->manager->epoll_fd, EPOLL_CTL_ADD, s->fifo_fd, &ev) < 0)
-                        return -errno;
+                r = sd_event_source_set_priority(s->fifo_event_source, SD_EVENT_PRIORITY_IDLE);
+                if (r < 0)
+                        return r;
         }
 
         /* Open writing side */
@@ -933,18 +911,11 @@ int session_create_fifo(Session *s) {
         return r;
 }
 
-void session_remove_fifo(Session *s) {
+static void session_remove_fifo(Session *s) {
         assert(s);
 
-        if (s->fifo_fd >= 0) {
-                assert_se(hashmap_remove(s->manager->session_fds, INT_TO_PTR(s->fifo_fd + 1)) == s);
-                assert_se(epoll_ctl(s->manager->epoll_fd, EPOLL_CTL_DEL, s->fifo_fd, NULL) == 0);
-                close_nointr_nofail(s->fifo_fd);
-                s->fifo_fd = -1;
-
-                session_save(s);
-                user_save(s->user);
-        }
+        s->fifo_event_source = sd_event_source_unref(s->fifo_event_source);
+        s->fifo_fd = safe_close(s->fifo_fd);
 
         if (s->fifo_path) {
                 unlink(s->fifo_path);
@@ -953,35 +924,27 @@ void session_remove_fifo(Session *s) {
         }
 }
 
-int session_check_gc(Session *s, bool drop_not_started) {
-        int r;
-
+bool session_check_gc(Session *s, bool drop_not_started) {
         assert(s);
 
         if (drop_not_started && !s->started)
-                return 0;
+                return false;
+
+        if (!s->user)
+                return false;
 
         if (s->fifo_fd >= 0) {
-
-                r = pipe_eof(s->fifo_fd);
-                if (r < 0)
-                        return r;
-
-                if (r == 0)
-                        return 1;
+                if (pipe_eof(s->fifo_fd) <= 0)
+                        return true;
         }
 
-        if (s->cgroup_path) {
+        if (s->scope_job && manager_job_is_active(s->manager, s->scope_job))
+                return true;
 
-                r = cg_is_empty_recursive(SYSTEMD_CGROUP_CONTROLLER, s->cgroup_path, false);
-                if (r < 0)
-                        return r;
+        if (s->scope && manager_unit_is_active(s->manager, s->scope))
+                return true;
 
-                if (r <= 0)
-                        return 1;
-        }
-
-        return 0;
+        return false;
 }
 
 void session_add_to_gc_queue(Session *s) {
@@ -990,15 +953,19 @@ void session_add_to_gc_queue(Session *s) {
         if (s->in_gc_queue)
                 return;
 
-        LIST_PREPEND(Session, gc_queue, s->manager->session_gc_queue, s);
+        LIST_PREPEND(gc_queue, s->manager->session_gc_queue, s);
         s->in_gc_queue = true;
 }
 
 SessionState session_get_state(Session *s) {
         assert(s);
 
-        if (s->fifo_fd < 0)
+        /* always check closing first */
+        if (s->stopping || s->timer_event_source)
                 return SESSION_CLOSING;
+
+        if (s->scope_job || s->fifo_fd < 0)
+                return SESSION_OPENING;
 
         if (session_is_active(s))
                 return SESSION_ACTIVE;
@@ -1007,47 +974,190 @@ SessionState session_get_state(Session *s) {
 }
 
 int session_kill(Session *s, KillWho who, int signo) {
-        int r = 0;
-        Set *pid_set = NULL;
-
         assert(s);
 
-        if (!s->cgroup_path)
+        if (!s->scope)
                 return -ESRCH;
 
-        if (s->leader <= 0 && who == KILL_LEADER)
-                return -ESRCH;
-
-        if (s->leader > 0)
-                if (kill(s->leader, signo) < 0)
-                        r = -errno;
-
-        if (who == KILL_ALL) {
-                int q;
-
-                pid_set = set_new(trivial_hash_func, trivial_compare_func);
-                if (!pid_set)
-                        return -ENOMEM;
-
-                if (s->leader > 0) {
-                        q = set_put(pid_set, LONG_TO_PTR(s->leader));
-                        if (q < 0)
-                                r = q;
-                }
-
-                q = cg_kill_recursive(SYSTEMD_CGROUP_CONTROLLER, s->cgroup_path, signo, false, true, false, pid_set);
-                if (q < 0)
-                        if (q != -EAGAIN && q != -ESRCH && q != -ENOENT)
-                                r = q;
-        }
-
-        if (pid_set)
-                set_free(pid_set);
-
-        return r;
+        return manager_kill_unit(s->manager, s->scope, who, signo, NULL);
 }
 
-static const char* const session_state_table[_SESSION_TYPE_MAX] = {
+static int session_open_vt(Session *s) {
+        char path[sizeof("/dev/tty") + DECIMAL_STR_MAX(s->vtnr)];
+
+        if (!s->vtnr)
+                return -1;
+
+        if (s->vtfd >= 0)
+                return s->vtfd;
+
+        sprintf(path, "/dev/tty%u", s->vtnr);
+        s->vtfd = open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK | O_NOCTTY);
+        if (s->vtfd < 0) {
+                log_error("cannot open VT %s of session %s: %m", path, s->id);
+                return -errno;
+        }
+
+        return s->vtfd;
+}
+
+static int session_vt_fn(sd_event_source *source, const struct signalfd_siginfo *si, void *data) {
+        Session *s = data;
+
+        if (s->vtfd >= 0)
+                ioctl(s->vtfd, VT_RELDISP, 1);
+
+        return 0;
+}
+
+void session_prepare_vt(Session *s) {
+        int vt, r;
+        struct vt_mode mode = { 0 };
+        sigset_t mask;
+
+        vt = session_open_vt(s);
+        if (vt < 0)
+                return;
+
+        r = fchown(vt, s->user->uid, -1);
+        if (r < 0)
+                goto error;
+
+        r = ioctl(vt, KDSKBMODE, K_OFF);
+        if (r < 0)
+                goto error;
+
+        r = ioctl(vt, KDSETMODE, KD_GRAPHICS);
+        if (r < 0)
+                goto error;
+
+        sigemptyset(&mask);
+        sigaddset(&mask, SIGUSR1);
+        sigprocmask(SIG_BLOCK, &mask, NULL);
+
+        r = sd_event_add_signal(s->manager->event, &s->vt_source, SIGUSR1, session_vt_fn, s);
+        if (r < 0)
+                goto error;
+
+        /* Oh, thanks to the VT layer, VT_AUTO does not work with KD_GRAPHICS.
+         * So we need a dummy handler here which just acknowledges *all* VT
+         * switch requests. */
+        mode.mode = VT_PROCESS;
+        mode.relsig = SIGUSR1;
+        mode.acqsig = SIGUSR1;
+        r = ioctl(vt, VT_SETMODE, &mode);
+        if (r < 0)
+                goto error;
+
+        return;
+
+error:
+        log_error("cannot mute VT %u for session %s (%d/%d)", s->vtnr, s->id, r, errno);
+        session_restore_vt(s);
+}
+
+void session_restore_vt(Session *s) {
+        _cleanup_free_ char *utf8 = NULL;
+        int vt, kb = K_XLATE;
+        struct vt_mode mode = { 0 };
+
+        vt = session_open_vt(s);
+        if (vt < 0)
+                return;
+
+        s->vt_source = sd_event_source_unref(s->vt_source);
+
+        ioctl(vt, KDSETMODE, KD_TEXT);
+
+        if (read_one_line_file("/sys/module/vt/parameters/default_utf8", &utf8) >= 0 && *utf8 == '1')
+                kb = K_UNICODE;
+
+        ioctl(vt, KDSKBMODE, kb);
+
+        mode.mode = VT_AUTO;
+        ioctl(vt, VT_SETMODE, &mode);
+
+        fchown(vt, 0, -1);
+
+        s->vtfd = safe_close(s->vtfd);
+}
+
+bool session_is_controller(Session *s, const char *sender) {
+        assert(s);
+
+        return streq_ptr(s->controller, sender);
+}
+
+static void session_swap_controller(Session *s, char *name) {
+        SessionDevice *sd;
+
+        if (s->controller) {
+                manager_drop_busname(s->manager, s->controller);
+                free(s->controller);
+                s->controller = NULL;
+
+                /* Drop all devices as they're now unused. Do that after the
+                 * controller is released to avoid sending out useles
+                 * dbus signals. */
+                while ((sd = hashmap_first(s->devices)))
+                        session_device_free(sd);
+
+                if (!name)
+                        session_restore_vt(s);
+        }
+
+        s->controller = name;
+        session_save(s);
+}
+
+int session_set_controller(Session *s, const char *sender, bool force) {
+        char *t;
+        int r;
+
+        assert(s);
+        assert(sender);
+
+        if (session_is_controller(s, sender))
+                return 0;
+        if (s->controller && !force)
+                return -EBUSY;
+
+        t = strdup(sender);
+        if (!t)
+                return -ENOMEM;
+
+        r = manager_watch_busname(s->manager, sender);
+        if (r) {
+                free(t);
+                return r;
+        }
+
+        session_swap_controller(s, t);
+
+        /* When setting a session controller, we forcibly mute the VT and set
+         * it into graphics-mode. Applications can override that by changing
+         * VT state after calling TakeControl(). However, this serves as a good
+         * default and well-behaving controllers can now ignore VTs entirely.
+         * Note that we reset the VT on ReleaseControl() and if the controller
+         * exits.
+         * If logind crashes/restarts, we restore the controller during restart
+         * or reset the VT in case it crashed/exited, too. */
+        session_prepare_vt(s);
+
+        return 0;
+}
+
+void session_drop_controller(Session *s) {
+        assert(s);
+
+        if (!s->controller)
+                return;
+
+        session_swap_controller(s, NULL);
+}
+
+static const char* const session_state_table[_SESSION_STATE_MAX] = {
+        [SESSION_OPENING] = "opening",
         [SESSION_ONLINE] = "online",
         [SESSION_ACTIVE] = "active",
         [SESSION_CLOSING] = "closing"
@@ -1056,9 +1166,11 @@ static const char* const session_state_table[_SESSION_TYPE_MAX] = {
 DEFINE_STRING_TABLE_LOOKUP(session_state, SessionState);
 
 static const char* const session_type_table[_SESSION_TYPE_MAX] = {
+        [SESSION_UNSPECIFIED] = "unspecified",
         [SESSION_TTY] = "tty",
         [SESSION_X11] = "x11",
-        [SESSION_UNSPECIFIED] = "unspecified"
+        [SESSION_WAYLAND] = "wayland",
+        [SESSION_MIR] = "mir",
 };
 
 DEFINE_STRING_TABLE_LOOKUP(session_type, SessionType);

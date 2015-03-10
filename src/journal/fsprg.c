@@ -19,7 +19,13 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301  USA
+ */
+
+/*
+ * See "Practical Secure Logging: Seekable Sequential Key Generators"
+ * by G. A. Marson, B. Poettering for details:
  *
+ * http://eprint.iacr.org/2013/397
  */
 
 #include <gcrypt.h>
@@ -45,7 +51,7 @@ static void mpi_export(void *buf, size_t buflen, const gcry_mpi_t x) {
         assert(gcry_mpi_cmp_ui(x, 0) >= 0);
         len = (gcry_mpi_get_nbits(x) + 7) / 8;
         assert(len <= buflen);
-        memset(buf, 0, buflen);
+        memzero(buf, buflen);
         gcry_mpi_print(GCRYMPI_FMT_USG, buf + (buflen - len), len, &nwritten, x);
         assert(nwritten == len);
 }
@@ -300,7 +306,7 @@ void FSPRG_GenState0(void *state, const void *mpk, const void *seed, size_t seed
 
         memcpy(state, mpk, 2 + secpar / 8);
         mpi_export(state + 2 + 1 * secpar / 8, secpar / 8, x);
-        memset(state + 2 + 2 * secpar / 8, 0, 8);
+        memzero(state + 2 + 2 * secpar / 8, 8);
 
         gcry_mpi_release(n);
         gcry_mpi_release(x);

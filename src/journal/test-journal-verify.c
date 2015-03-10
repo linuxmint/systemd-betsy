@@ -48,7 +48,7 @@ static void bit_toggle(const char *fn, uint64_t p) {
         r = pwrite(fd, &b, 1, p/8);
         assert(r == 1);
 
-        close_nointr_nofail(fd);
+        safe_close(fd);
 }
 
 static int raw_verify(const char *fn, const char *verification_key) {
@@ -76,6 +76,10 @@ int main(int argc, char *argv[]) {
         char c[FORMAT_TIMESPAN_MAX];
         struct stat st;
         uint64_t p;
+
+        /* journal_file_open requires a valid machine id */
+        if (access("/etc/machine-id", F_OK) != 0)
+                return EXIT_TEST_SKIP;
 
         log_set_max_level(LOG_DEBUG);
 
@@ -130,10 +134,10 @@ int main(int argc, char *argv[]) {
                 for (p = 38448*8+0; p < ((uint64_t) st.st_size * 8); p ++) {
                         bit_toggle("test.journal", p);
 
-                        log_info("[ %llu+%llu]", (unsigned long long) p / 8, (unsigned long long) p % 8);
+                        log_info("[ %"PRIu64"+%"PRIu64"]", p / 8, p % 8);
 
                         if (raw_verify("test.journal", verification_key) >= 0)
-                                log_notice(ANSI_HIGHLIGHT_RED_ON ">>>> %llu (bit %llu) can be toggled without detection." ANSI_HIGHLIGHT_OFF, (unsigned long long) p / 8, (unsigned long long) p % 8);
+                                log_notice(ANSI_HIGHLIGHT_RED_ON ">>>> %"PRIu64" (bit %"PRIu64") can be toggled without detection." ANSI_HIGHLIGHT_OFF, p / 8, p % 8);
 
                         bit_toggle("test.journal", p);
                 }

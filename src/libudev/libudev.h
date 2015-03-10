@@ -81,7 +81,7 @@ struct udev *udev_device_get_udev(struct udev_device *udev_device);
 struct udev_device *udev_device_new_from_syspath(struct udev *udev, const char *syspath);
 struct udev_device *udev_device_new_from_devnum(struct udev *udev, char type, dev_t devnum);
 struct udev_device *udev_device_new_from_subsystem_sysname(struct udev *udev, const char *subsystem, const char *sysname);
-struct udev_device *udev_device_new_from_device_id(struct udev *udev, char *id);
+struct udev_device *udev_device_new_from_device_id(struct udev *udev, const char *id);
 struct udev_device *udev_device_new_from_environment(struct udev *udev);
 /* udev_device_get_parent_*() does not take a reference on the returned device, it is automatically unref'd with the parent */
 struct udev_device *udev_device_get_parent(struct udev_device *udev_device);
@@ -170,14 +170,16 @@ struct udev_queue *udev_queue_ref(struct udev_queue *udev_queue);
 struct udev_queue *udev_queue_unref(struct udev_queue *udev_queue);
 struct udev *udev_queue_get_udev(struct udev_queue *udev_queue);
 struct udev_queue *udev_queue_new(struct udev *udev);
-unsigned long long int udev_queue_get_kernel_seqnum(struct udev_queue *udev_queue);
-unsigned long long int udev_queue_get_udev_seqnum(struct udev_queue *udev_queue);
+unsigned long long int udev_queue_get_kernel_seqnum(struct udev_queue *udev_queue) __attribute__ ((deprecated));
+unsigned long long int udev_queue_get_udev_seqnum(struct udev_queue *udev_queue) __attribute__ ((deprecated));
 int udev_queue_get_udev_is_active(struct udev_queue *udev_queue);
 int udev_queue_get_queue_is_empty(struct udev_queue *udev_queue);
-int udev_queue_get_seqnum_is_finished(struct udev_queue *udev_queue, unsigned long long int seqnum);
+int udev_queue_get_seqnum_is_finished(struct udev_queue *udev_queue, unsigned long long int seqnum) __attribute__ ((deprecated));
 int udev_queue_get_seqnum_sequence_is_finished(struct udev_queue *udev_queue,
-                                               unsigned long long int start, unsigned long long int end);
-struct udev_list_entry *udev_queue_get_queued_list_entry(struct udev_queue *udev_queue);
+                                               unsigned long long int start, unsigned long long int end) __attribute__ ((deprecated));
+int udev_queue_get_fd(struct udev_queue *udev_queue);
+int udev_queue_flush(struct udev_queue *udev_queue);
+struct udev_list_entry *udev_queue_get_queued_list_entry(struct udev_queue *udev_queue) __attribute__ ((deprecated));
 
 /*
  *  udev_hwdb

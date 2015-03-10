@@ -28,11 +28,15 @@
 #include "strv.h"
 #include "util.h"
 
-int parse_sleep_config(const char *verb, char ***modes, char ***states) {
+#define USE(x, y) do{ (x) = (y); (y) = NULL; } while(0)
+
+int parse_sleep_config(const char *verb, char ***_modes, char ***_states) {
+
         _cleanup_strv_free_ char
                 **suspend_mode = NULL, **suspend_state = NULL,
                 **hibernate_mode = NULL, **hibernate_state = NULL,
                 **hybrid_mode = NULL, **hybrid_state = NULL;
+        char **modes, **states;
 
         const ConfigTableItem items[] = {
                 { "Sleep",   "SuspendMode",      config_parse_strv,  0, &suspend_mode  },
@@ -41,10 +45,11 @@ int parse_sleep_config(const char *verb, char ***modes, char ***states) {
                 { "Sleep",   "HibernateState",   config_parse_strv,  0, &hibernate_state },
                 { "Sleep",   "HybridSleepMode",  config_parse_strv,  0, &hybrid_mode  },
                 { "Sleep",   "HybridSleepState", config_parse_strv,  0, &hybrid_state },
-                {}};
+                {}
+        };
 
         int r;
-        FILE _cleanup_fclose_ *f;
+        _cleanup_fclose_ FILE *f;
 
         f = fopen(PKGSYSCONFDIR "/sleep.conf", "re");
         if (!f)
@@ -59,47 +64,46 @@ int parse_sleep_config(const char *verb, char ***modes, char ***states) {
 
         if (streq(verb, "suspend")) {
                 /* empty by default */
-                *modes = suspend_mode;
+                USE(modes, suspend_mode);
 
                 if (suspend_state)
-                        *states = suspend_state;
+                        USE(states, suspend_state);
                 else
-                        *states = strv_split_nulstr("mem\0standby\0freeze\0");
+                        states = strv_new("mem", "standby", "freeze", NULL);
 
-                suspend_mode = suspend_state = NULL;
         } else if (streq(verb, "hibernate")) {
                 if (hibernate_mode)
-                        *modes = hibernate_mode;
+                        USE(modes, hibernate_mode);
                 else
-                        *modes = strv_split_nulstr("platform\0shutdown\0");
+                        modes = strv_new("platform", "shutdown", NULL);
 
                 if (hibernate_state)
-                        *states = hibernate_state;
+                        USE(states, hibernate_state);
                 else
-                        *states = strv_split_nulstr("disk\0");
+                        states = strv_new("disk", NULL);
 
-                hibernate_mode = hibernate_state = NULL;
         } else if (streq(verb, "hybrid-sleep")) {
                 if (hybrid_mode)
-                        *modes = hybrid_mode;
+                        USE(modes, hybrid_mode);
                 else
-                        *modes = strv_split_nulstr("suspend\0platform\0shutdown\0");
+                        modes = strv_new("suspend", "platform", "shutdown", NULL);
 
                 if (hybrid_state)
-                        *states = hybrid_state;
+                        USE(states, hybrid_state);
                 else
-                        *states = strv_split_nulstr("disk\0");
+                        states = strv_new("disk", NULL);
 
-                hybrid_mode = hybrid_state = NULL;
         } else
                 assert_not_reached("what verb");
 
-        if (!modes || !states) {
-                strv_free(*modes);
-                strv_free(*states);
+        if ((!modes && !streq(verb, "suspend")) || !states) {
+                strv_free(modes);
+                strv_free(states);
                 return log_oom();
         }
 
+        *_modes = modes;
+        *_states = states;
         return 0;
 }
 
@@ -163,6 +167,95 @@ int can_sleep_disk(char **types) {
         return false;
 }
 
+#define HIBERNATION_SWAP_THRESHOLD 0.98
+
+static int hibernation_partition_size(size_t *size, size_t *used) {
+        _cleanup_fclose_ FILE *f;
+        int i;
+
+        assert(size);
+        assert(used);
+
+        f = fopen("/proc/swaps", "re");
+        if (!f) {
+                log_full(errno == ENOENT ? LOG_DEBUG : LOG_WARNING,
+                         "Failed to retrieve open /proc/swaps: %m");
+                assert(errno > 0);
+                return -errno;
+        }
+
+        (void) fscanf(f, "%*s %*s %*s %*s %*s\n");
+
+        for (i = 1;; i++) {
+                _cleanup_free_ char *dev = NULL, *type = NULL;
+                size_t size_field, used_field;
+                int k;
+
+                k = fscanf(f,
+                           "%ms "   /* device/file */
+                           "%ms "   /* type of swap */
+                           "%zd "   /* swap size */
+                           "%zd "   /* used */
+                           "%*i\n", /* priority */
+                           &dev, &type, &size_field, &used_field);
+                if (k != 4) {
+                        if (k == EOF)
+                                break;
+
+                        log_warning("Failed to parse /proc/swaps:%u", i);
+                        continue;
+                }
+
+                if (streq(type, "partition") && endswith(dev, "\\040(deleted)")) {
+                        log_warning("Ignoring deleted swapfile '%s'.", dev);
+                        continue;
+                }
+
+                *size = size_field;
+                *used = used_field;
+                return 0;
+        }
+
+        log_debug("No swap partitions were found.");
+        return -ENOSYS;
+}
+
+static bool enough_memory_for_hibernation(void) {
+        _cleanup_free_ char *active = NULL;
+        unsigned long long act = 0;
+        size_t size = 0, used = 0;
+        int r;
+
+        /* TuxOnIce is an alternate implementation for hibernation.
+         * It can be configured to compress the image to a file or an inactive
+         * swap partition, so there's nothing more we can do here. */
+        if (access("/sys/power/tuxonice", F_OK) == 0)
+                return true;
+
+        r = hibernation_partition_size(&size, &used);
+        if (r < 0)
+                return false;
+
+        r = get_status_field("/proc/meminfo", "\nActive(anon):", &active);
+        if (r < 0) {
+                log_error("Failed to retrieve Active(anon) from /proc/meminfo: %s", strerror(-r));
+                return false;
+        }
+
+        r = safe_atollu(active, &act);
+        if (r < 0) {
+                log_error("Failed to parse Active(anon) from /proc/meminfo: %s: %s",
+                          active, strerror(-r));
+                return false;
+        }
+
+        r = act <= (size - used) * HIBERNATION_SWAP_THRESHOLD;
+        log_debug("Hibernation is %spossible, Active(anon)=%llu kB, size=%zu kB, used=%zu kB, threshold=%.2g%%",
+                  r ? "" : "im", act, size, used, 100*HIBERNATION_SWAP_THRESHOLD);
+
+        return r;
+}
+
 int can_sleep(const char *verb) {
         _cleanup_strv_free_ char **modes = NULL, **states = NULL;
         int r;
@@ -175,5 +268,8 @@ int can_sleep(const char *verb) {
         if (r < 0)
                 return false;
 
-        return can_sleep_state(states) && can_sleep_disk(modes);
+        if (!can_sleep_state(states) || !can_sleep_disk(modes))
+                return false;
+
+        return streq(verb, "suspend") || enough_memory_for_hibernation();
 }

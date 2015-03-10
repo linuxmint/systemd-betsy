@@ -25,11 +25,9 @@
 
 #include "log.h"
 #include "util.h"
-#include "cgroup-util.h"
 #include "fileio.h"
 
 int main(int argc, char*argv[]) {
-        int ret = EXIT_FAILURE;
 
         if (argc != 2) {
                 log_error("This program requires one argument.");
@@ -43,7 +41,7 @@ int main(int argc, char*argv[]) {
         umask(0022);
 
         if (streq(argv[1], "start")) {
-                int q = 0, r = 0;
+                int r = 0;
 
                 if (unlink("/run/nologin") < 0 && errno != ENOENT) {
                         log_error("Failed to remove /run/nologin file: %m");
@@ -51,7 +49,6 @@ int main(int argc, char*argv[]) {
                 }
 
                 if (unlink("/etc/nologin") < 0 && errno != ENOENT) {
-
                         /* If the file doesn't exist and /etc simply
                          * was read-only (in which case unlink()
                          * returns EROFS even if the file doesn't
@@ -59,44 +56,26 @@ int main(int argc, char*argv[]) {
 
                         if (errno != EROFS || access("/etc/nologin", F_OK) >= 0) {
                                 log_error("Failed to remove /etc/nologin file: %m");
-                                q = -errno;
+                                return EXIT_FAILURE;
                         }
                 }
 
-                if (r < 0 || q < 0)
-                        goto finish;
+                if (r < 0)
+                        return EXIT_FAILURE;
 
         } else if (streq(argv[1], "stop")) {
-                int r, q;
-                char *cgroup_user_tree = NULL;
+                int r;
 
                 r = write_string_file_atomic("/run/nologin", "System is going down.");
-                if (r < 0)
+                if (r < 0) {
                         log_error("Failed to create /run/nologin: %s", strerror(-r));
-
-                q = cg_get_user_path(&cgroup_user_tree);
-                if (q < 0) {
-                        log_error("Failed to determine use path: %s", strerror(-q));
-                        goto finish;
+                        return EXIT_FAILURE;
                 }
-
-                q = cg_kill_recursive_and_wait(SYSTEMD_CGROUP_CONTROLLER, cgroup_user_tree, true);
-                free(cgroup_user_tree);
-                if (q < 0) {
-                        log_error("Failed to kill sessions: %s", strerror(-q));
-                        goto finish;
-                }
-
-                if (r < 0)
-                        goto finish;
 
         } else {
                 log_error("Unknown verb %s.", argv[1]);
-                goto finish;
+                return EXIT_FAILURE;
         }
 
-        ret = EXIT_SUCCESS;
-
-finish:
-        return ret;
+        return EXIT_SUCCESS;
 }

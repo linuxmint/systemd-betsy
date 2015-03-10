@@ -40,6 +40,7 @@ static void snapshot_init(Unit *u) {
 
         UNIT(s)->ignore_on_isolate = true;
         UNIT(s)->ignore_on_snapshot = true;
+        UNIT(s)->allow_isolate = true;
 }
 
 static void snapshot_set_state(Snapshot *s, SnapshotState state) {
@@ -50,10 +51,11 @@ static void snapshot_set_state(Snapshot *s, SnapshotState state) {
         s->state = state;
 
         if (state != old_state)
-                log_debug("%s changed %s -> %s",
-                          UNIT(s)->id,
-                          snapshot_state_to_string(old_state),
-                          snapshot_state_to_string(state));
+                log_debug_unit(UNIT(s)->id,
+                               "%s changed %s -> %s",
+                               UNIT(s)->id,
+                               snapshot_state_to_string(old_state),
+                               snapshot_state_to_string(state));
 
         unit_notify(UNIT(s), state_translation_table[old_state], state_translation_table[state], true);
 }
@@ -66,7 +68,7 @@ static int snapshot_load(Unit *u) {
 
         /* Make sure that only snapshots created via snapshot_create()
          * can be loaded */
-        if (!s->by_snapshot_create && UNIT(s)->manager->n_reloading <= 0)
+        if (!u->transient && UNIT(s)->manager->n_reloading <= 0)
                 return -ENOENT;
 
         u->load_state = UNIT_LOADED;
@@ -151,24 +153,27 @@ static int snapshot_deserialize_item(Unit *u, const char *key, const char *value
         if (streq(key, "state")) {
                 SnapshotState state;
 
-                if ((state = snapshot_state_from_string(value)) < 0)
-                        log_debug("Failed to parse state value %s", value);
+                state = snapshot_state_from_string(value);
+                if (state < 0)
+                        log_debug_unit(u->id, "Failed to parse state value %s", value);
                 else
                         s->deserialized_state = state;
 
         } else if (streq(key, "cleanup")) {
 
-                if ((r = parse_boolean(value)) < 0)
-                        log_debug("Failed to parse cleanup value %s", value);
+                r = parse_boolean(value);
+                if (r < 0)
+                        log_debug_unit(u->id, "Failed to parse cleanup value %s", value);
                 else
                         s->cleanup = r;
 
         } else if (streq(key, "wants")) {
 
-                if ((r = unit_add_two_dependencies_by_name(u, UNIT_AFTER, UNIT_WANTS, value, NULL, true)) < 0)
+                r = unit_add_two_dependencies_by_name(u, UNIT_AFTER, UNIT_WANTS, value, NULL, true);
+                if (r < 0)
                         return r;
         } else
-                log_debug("Unknown serialization key '%s'", key);
+                log_debug_unit(u->id, "Unknown serialization key '%s'", key);
 
         return 0;
 }
@@ -185,10 +190,10 @@ _pure_ static const char *snapshot_sub_state_to_string(Unit *u) {
         return snapshot_state_to_string(SNAPSHOT(u)->state);
 }
 
-int snapshot_create(Manager *m, const char *name, bool cleanup, DBusError *e, Snapshot **_s) {
-        Iterator i;
+int snapshot_create(Manager *m, const char *name, bool cleanup, sd_bus_error *e, Snapshot **_s) {
+        _cleanup_free_ char *n = NULL;
         Unit *other, *u = NULL;
-        char *n = NULL;
+        Iterator i;
         int r;
         const char *k;
 
@@ -196,20 +201,14 @@ int snapshot_create(Manager *m, const char *name, bool cleanup, DBusError *e, Sn
         assert(_s);
 
         if (name) {
-                if (!unit_name_is_valid(name, false)) {
-                        dbus_set_error(e, BUS_ERROR_INVALID_NAME, "Unit name %s is not valid.", name);
-                        return -EINVAL;
-                }
+                if (!unit_name_is_valid(name, TEMPLATE_INVALID))
+                        return sd_bus_error_setf(e, SD_BUS_ERROR_INVALID_ARGS, "Unit name %s is not valid.", name);
 
-                if (unit_name_to_type(name) != UNIT_SNAPSHOT) {
-                        dbus_set_error(e, BUS_ERROR_UNIT_TYPE_MISMATCH, "Unit name %s lacks snapshot suffix.", name);
-                        return -EINVAL;
-                }
+                if (unit_name_to_type(name) != UNIT_SNAPSHOT)
+                        return sd_bus_error_setf(e, SD_BUS_ERROR_INVALID_ARGS, "Unit name %s lacks snapshot suffix.", name);
 
-                if (manager_get_unit(m, name)) {
-                        dbus_set_error(e, BUS_ERROR_UNIT_EXISTS, "Snapshot %s exists already.", name);
-                        return -EEXIST;
-                }
+                if (manager_get_unit(m, name))
+                        sd_bus_error_setf(e, BUS_ERROR_UNIT_EXISTS, "Snapshot %s exists already.", name);
 
         } else {
 
@@ -217,28 +216,28 @@ int snapshot_create(Manager *m, const char *name, bool cleanup, DBusError *e, Sn
                         if (asprintf(&n, "snapshot-%u.snapshot", ++ m->n_snapshots) < 0)
                                 return -ENOMEM;
 
-                        if (!manager_get_unit(m, n))
+                        if (!manager_get_unit(m, n)) {
+                                name = n;
                                 break;
+                        }
 
                         free(n);
+                        n = NULL;
                 }
-
-                name = n;
         }
 
         r = manager_load_unit_prepare(m, name, NULL, e, &u);
-        free(n);
-
         if (r < 0)
                 goto fail;
 
-        SNAPSHOT(u)->by_snapshot_create = true;
+        u->transient = true;
         manager_dispatch_load_queue(m);
         assert(u->load_state == UNIT_LOADED);
 
         HASHMAP_FOREACH_KEY(other, k, m->units, i) {
 
-                if (other->ignore_on_snapshot)
+                if (other->ignore_on_snapshot ||
+                    other->transient)
                         continue;
 
                 if (k != other->id)
@@ -251,13 +250,15 @@ int snapshot_create(Manager *m, const char *name, bool cleanup, DBusError *e, Sn
                 if (!UNIT_IS_ACTIVE_OR_ACTIVATING(unit_active_state(other)))
                         continue;
 
-                if ((r = unit_add_two_dependencies(u, UNIT_AFTER, UNIT_WANTS, other, true)) < 0)
+                r = unit_add_two_dependencies(u, UNIT_AFTER, UNIT_WANTS, other, true);
+                if (r < 0)
                         goto fail;
         }
 
         SNAPSHOT(u)->cleanup = cleanup;
-        u->allow_isolate = true;
         *_s = SNAPSHOT(u);
+
+        log_info_unit(u->id, "Created snapshot %s.", u->id);
 
         return 0;
 
@@ -270,6 +271,8 @@ fail:
 
 void snapshot_remove(Snapshot *s) {
         assert(s);
+
+        log_info_unit(UNIT(s)->id, "Removing snapshot %s.", UNIT(s)->id);
 
         unit_add_to_cleanup_queue(UNIT(s));
 }
@@ -289,8 +292,8 @@ const UnitVTable snapshot_vtable = {
         .no_gc = true,
 
         .init = snapshot_init,
-
         .load = snapshot_load,
+
         .coldplug = snapshot_coldplug,
 
         .dump = snapshot_dump,
@@ -305,5 +308,5 @@ const UnitVTable snapshot_vtable = {
         .sub_state_to_string = snapshot_sub_state_to_string,
 
         .bus_interface = "org.freedesktop.systemd1.Snapshot",
-        .bus_message_handler = bus_snapshot_message_handler
+        .bus_vtable = bus_snapshot_vtable
 };

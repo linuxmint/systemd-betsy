@@ -34,6 +34,7 @@
 static bool ignore_proc(pid_t pid) {
         _cleanup_fclose_ FILE *f = NULL;
         char c;
+        const char *p;
         size_t count;
         uid_t uid;
         int r;
@@ -50,7 +51,8 @@ static bool ignore_proc(pid_t pid) {
         if (uid != 0)
                 return false;
 
-        f = fopen(procfs_file_alloca(pid, "cmdline"), "re");
+        p = procfs_file_alloca(pid, "cmdline");
+        f = fopen(p, "re");
         if (!f)
                 return true; /* not really, but has the desired effect */
 
@@ -144,7 +146,7 @@ static void wait_for_children(Set *pids, sigset_t *mask) {
         }
 }
 
-static int killall(int sig, Set *pids) {
+static int killall(int sig, Set *pids, bool send_sighup) {
         _cleanup_closedir_ DIR *dir = NULL;
         struct dirent *d;
 
@@ -166,25 +168,41 @@ static int killall(int sig, Set *pids) {
                         continue;
 
                 if (sig == SIGKILL) {
-                        _cleanup_free_ char *s;
+                        _cleanup_free_ char *s = NULL;
 
                         get_process_comm(pid, &s);
-                        log_notice("Sending SIGKILL to PID %lu (%s).", (unsigned long) pid, strna(s));
+                        log_notice("Sending SIGKILL to PID "PID_FMT" (%s).", pid, strna(s));
                 }
 
                 if (kill(pid, sig) >= 0) {
                         if (pids)
-                                set_put(pids, ULONG_TO_PTR((unsigned long) pid));
+                                set_put(pids, ULONG_TO_PTR(pid));
                 } else if (errno != ENOENT)
                         log_warning("Could not kill %d: %m", pid);
+
+                if (send_sighup) {
+                        /* Optionally, also send a SIGHUP signal, but
+                        only if the process has a controlling
+                        tty. This is useful to allow handling of
+                        shells which ignore SIGTERM but react to
+                        SIGHUP. We do not send this to processes that
+                        have no controlling TTY since we don't want to
+                        trigger reloads of daemon processes. Also we
+                        make sure to only send this after SIGTERM so
+                        that SIGTERM is always first in the queue. */
+
+
+                        if (get_ctty_devnr(pid, NULL) >= 0)
+                                kill(pid, SIGHUP);
+                }
         }
 
         return set_size(pids);
 }
 
-void broadcast_signal(int sig, bool wait_for_exit) {
+void broadcast_signal(int sig, bool wait_for_exit, bool send_sighup) {
         sigset_t mask, oldmask;
-        Set *pids = NULL;
+        _cleanup_set_free_ Set *pids = NULL;
 
         if (wait_for_exit)
                 pids = set_new(trivial_hash_func, trivial_compare_func);
@@ -196,7 +214,7 @@ void broadcast_signal(int sig, bool wait_for_exit) {
         if (kill(-1, SIGSTOP) < 0 && errno != ESRCH)
                 log_warning("kill(-1, SIGSTOP) failed: %m");
 
-        killall(sig, pids);
+        killall(sig, pids, send_sighup);
 
         if (kill(-1, SIGCONT) < 0 && errno != ESRCH)
                 log_warning("kill(-1, SIGCONT) failed: %m");
@@ -205,6 +223,4 @@ void broadcast_signal(int sig, bool wait_for_exit) {
                 wait_for_children(pids, &mask);
 
         assert_se(sigprocmask(SIG_SETMASK, &oldmask, NULL) == 0);
-
-        set_free(pids);
 }

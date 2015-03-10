@@ -4,7 +4,7 @@ set -e
 echo " * cgroup is mounted"
 mountpoint -q /sys/fs/cgroup/systemd
 echo " * daemon is started"
-# should happen with upstart script, not with D-BUS activation
+# should start at boot, not with D-BUS activation
 pidof systemd-logind > /dev/null
 
 # loginctl should succeed
@@ -36,7 +36,7 @@ pkill -HUP udevd || pkill -HUP systemd-udevd
 echo " * coldplug: logind started with existing device"
 killall systemd-logind
 modprobe scsi_debug
-while ! dev=/dev/`ls /sys/bus/pseudo/drivers/scsi_debug/adapter*/host*/target*/*:*/block`; do sleep 0.1; done
+while ! dev=/dev/`ls /sys/bus/pseudo/drivers/scsi_debug/adapter*/host*/target*/*:*/block 2>/dev/null`; do sleep 0.1; done
 test -b $dev
 echo "got block device $dev"
 udevadm settle

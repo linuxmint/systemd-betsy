@@ -25,18 +25,15 @@
 
 #include "socket-util.h"
 #include "path-util.h"
+#include "selinux-util.h"
 #include "journald-server.h"
 #include "journald-native.h"
 #include "journald-kmsg.h"
 #include "journald-console.h"
 #include "journald-syslog.h"
+#include "journald-wall.h"
 
-/* Make sure not to make this smaller than the maximum coredump
- * size. See COREDUMP_MAX in coredump.c */
-#define ENTRY_SIZE_MAX (1024*1024*768)
-#define DATA_SIZE_MAX (1024*1024*768)
-
-static bool valid_user_field(const char *p, size_t l) {
+bool valid_user_field(const char *p, size_t l, bool allow_protected) {
         const char *a;
 
         /* We kinda enforce POSIX syntax recommendations for
@@ -54,7 +51,7 @@ static bool valid_user_field(const char *p, size_t l) {
                 return false;
 
         /* Variables starting with an underscore are protected */
-        if (p[0] == '_')
+        if (!allow_protected && p[0] == '_')
                 return false;
 
         /* Don't allow digits as first character */
@@ -63,12 +60,16 @@ static bool valid_user_field(const char *p, size_t l) {
 
         /* Only allow A-Z0-9 and '_' */
         for (a = p; a < p + l; a++)
-                if (!((*a >= 'A' && *a <= 'Z') ||
-                      (*a >= '0' && *a <= '9') ||
-                      *a == '_'))
+                if ((*a < 'A' || *a > 'Z') &&
+                    (*a < '0' || *a > '9') &&
+                    *a != '_')
                         return false;
 
         return true;
+}
+
+static bool allow_object_pid(struct ucred *ucred) {
+        return ucred && ucred->uid == 0;
 }
 
 void server_process_native_message(
@@ -79,11 +80,12 @@ void server_process_native_message(
                 const char *label, size_t label_len) {
 
         struct iovec *iovec = NULL;
-        unsigned n = 0, m = 0, j, tn = (unsigned) -1;
+        unsigned n = 0, j, tn = (unsigned) -1;
         const char *p;
-        size_t remaining;
+        size_t remaining, m = 0;
         int priority = LOG_INFO;
         char *identifier = NULL, *message = NULL;
+        pid_t object_pid = 0;
 
         assert(s);
         assert(buffer || buffer_size == 0);
@@ -104,7 +106,7 @@ void server_process_native_message(
 
                 if (e == p) {
                         /* Entry separator */
-                        server_dispatch_message(s, iovec, n, m, ucred, tv, label, label_len, NULL, priority);
+                        server_dispatch_message(s, iovec, n, m, ucred, tv, label, label_len, NULL, priority, object_pid);
                         n = 0;
                         priority = LOG_INFO;
 
@@ -124,24 +126,15 @@ void server_process_native_message(
                 /* A property follows */
 
                 /* n received properties, +1 for _TRANSPORT */
-                if (n + 1 + N_IOVEC_META_FIELDS >= m) {
-                        struct iovec *c;
-                        unsigned u;
-
-                        u = MAX((n + 1 + N_IOVEC_META_FIELDS) * 2U, 4U);
-                        c = realloc(iovec, u * sizeof(struct iovec));
-                        if (!c) {
-                                log_oom();
-                                break;
-                        }
-
-                        iovec = c;
-                        m = u;
+                if (!GREEDY_REALLOC(iovec, m, n + 1 + N_IOVEC_META_FIELDS +
+                                              !!object_pid * N_IOVEC_OBJECT_FIELDS)) {
+                        log_oom();
+                        break;
                 }
 
                 q = memchr(p, '=', e - p);
                 if (q) {
-                        if (valid_user_field(p, q - p)) {
+                        if (valid_user_field(p, q - p, false)) {
                                 size_t l;
 
                                 l = e - p;
@@ -158,23 +151,23 @@ void server_process_native_message(
                                  * of this entry for the rate limiting
                                  * logic */
                                 if (l == 10 &&
-                                    memcmp(p, "PRIORITY=", 9) == 0 &&
+                                    startswith(p, "PRIORITY=") &&
                                     p[9] >= '0' && p[9] <= '9')
                                         priority = (priority & LOG_FACMASK) | (p[9] - '0');
 
                                 else if (l == 17 &&
-                                         memcmp(p, "SYSLOG_FACILITY=", 16) == 0 &&
+                                         startswith(p, "SYSLOG_FACILITY=") &&
                                          p[16] >= '0' && p[16] <= '9')
                                         priority = (priority & LOG_PRIMASK) | ((p[16] - '0') << 3);
 
                                 else if (l == 18 &&
-                                         memcmp(p, "SYSLOG_FACILITY=", 16) == 0 &&
+                                         startswith(p, "SYSLOG_FACILITY=") &&
                                          p[16] >= '0' && p[16] <= '9' &&
                                          p[17] >= '0' && p[17] <= '9')
                                         priority = (priority & LOG_PRIMASK) | (((p[16] - '0')*10 + (p[17] - '0')) << 3);
 
                                 else if (l >= 19 &&
-                                         memcmp(p, "SYSLOG_IDENTIFIER=", 18) == 0) {
+                                         startswith(p, "SYSLOG_IDENTIFIER=")) {
                                         char *t;
 
                                         t = strndup(p + 18, l - 18);
@@ -183,7 +176,7 @@ void server_process_native_message(
                                                 identifier = t;
                                         }
                                 } else if (l >= 8 &&
-                                           memcmp(p, "MESSAGE=", 8) == 0) {
+                                           startswith(p, "MESSAGE=")) {
                                         char *t;
 
                                         t = strndup(p + 8, l - 8);
@@ -191,6 +184,16 @@ void server_process_native_message(
                                                 free(message);
                                                 message = t;
                                         }
+                                } else if (l > strlen("OBJECT_PID=") &&
+                                           l < strlen("OBJECT_PID=")  + DECIMAL_STR_MAX(pid_t) &&
+                                           startswith(p, "OBJECT_PID=") &&
+                                           allow_object_pid(ucred)) {
+                                        char buf[DECIMAL_STR_MAX(pid_t)];
+                                        memcpy(buf, p + strlen("OBJECT_PID="), l - strlen("OBJECT_PID="));
+                                        char_array_0(buf);
+
+                                        /* ignore error */
+                                        parse_pid(buf, &object_pid);
                                 }
                         }
 
@@ -231,7 +234,7 @@ void server_process_native_message(
                         k[e - p] = '=';
                         memcpy(k + (e - p) + 1, e + 1 + sizeof(uint64_t), l);
 
-                        if (valid_user_field(p, e - p)) {
+                        if (valid_user_field(p, e - p, false)) {
                                 iovec[n].iov_base = k;
                                 iovec[n].iov_len = (e - p) + 1 + l;
                                 n++;
@@ -258,9 +261,12 @@ void server_process_native_message(
 
                 if (s->forward_to_console)
                         server_forward_console(s, priority, identifier, message, ucred);
+
+                if (s->forward_to_wall)
+                        server_forward_wall(s, priority, identifier, message, ucred);
         }
 
-        server_dispatch_message(s, iovec, n, m, ucred, tv, label, label_len, NULL, priority);
+        server_dispatch_message(s, iovec, n, m, ucred, tv, label, label_len, NULL, priority, object_pid);
 
 finish:
         for (j = 0; j < n; j++)  {
@@ -362,7 +368,6 @@ void server_process_native_file(
 int server_open_native_socket(Server*s) {
         union sockaddr_union sa;
         int one, r;
-        struct epoll_event ev;
 
         assert(s);
 
@@ -382,7 +387,7 @@ int server_open_native_socket(Server*s) {
 
                 r = bind(s->native_fd, &sa.sa, offsetof(union sockaddr_union, un.sun_path) + strlen(sa.un.sun_path));
                 if (r < 0) {
-                        log_error("bind() failed: %m");
+                        log_error("bind(%s) failed: %m", sa.un.sun_path);
                         return -errno;
                 }
 
@@ -398,10 +403,12 @@ int server_open_native_socket(Server*s) {
         }
 
 #ifdef HAVE_SELINUX
-        one = 1;
-        r = setsockopt(s->native_fd, SOL_SOCKET, SO_PASSSEC, &one, sizeof(one));
-        if (r < 0)
-                log_warning("SO_PASSSEC failed: %m");
+        if (use_selinux()) {
+                one = 1;
+                r = setsockopt(s->native_fd, SOL_SOCKET, SO_PASSSEC, &one, sizeof(one));
+                if (r < 0)
+                        log_warning("SO_PASSSEC failed: %m");
+        }
 #endif
 
         one = 1;
@@ -411,12 +418,10 @@ int server_open_native_socket(Server*s) {
                 return -errno;
         }
 
-        zero(ev);
-        ev.events = EPOLLIN;
-        ev.data.fd = s->native_fd;
-        if (epoll_ctl(s->epoll_fd, EPOLL_CTL_ADD, s->native_fd, &ev) < 0) {
-                log_error("Failed to add native server fd to epoll object: %m");
-                return -errno;
+        r = sd_event_add_io(s->event, &s->native_event_source, s->native_fd, EPOLLIN, process_datagram, s);
+        if (r < 0) {
+                log_error("Failed to add native server fd to event loop: %s", strerror(-r));
+                return r;
         }
 
         return 0;

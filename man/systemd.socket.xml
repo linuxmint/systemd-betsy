@@ -55,7 +55,7 @@
                 <title>Description</title>
 
                 <para>A unit configuration file whose name ends in
-                <filename>.socket</filename> encodes information about
+                <literal>.socket</literal> encodes information about
                 an IPC or network socket or a file system FIFO
                 controlled and supervised by systemd, for socket-based
                 activation.</para>
@@ -77,26 +77,34 @@
                 <option>ExecStopPre=</option> and
                 <option>ExecStopPost=</option> commands are executed
                 in, and in
-                <citerefentry><refentrytitle>systemd.kill</refentrytitle><manvolnum>5</manvolnum></citerefentry>
-                which define the way the processes are
-                terminated.</para>
+                <citerefentry><refentrytitle>systemd.kill</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+                which define the way the processes are terminated, and
+                in
+                <citerefentry><refentrytitle>systemd.resource-control</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+                which configure resource control settings for the
+                processes of the socket.</para>
 
-                <para>For each socket file a matching service file
-                (see
+                <para>For each socket file, a matching service file
+                must exist, describing the service to start on
+                incoming traffic on the socket (see
                 <citerefentry><refentrytitle>systemd.service</refentrytitle><manvolnum>5</manvolnum></citerefentry>
-                for details) must exist, describing the service to
-                start on incoming traffic on the socket. Depending on
-                the setting of <option>Accept=</option> (see below),
-                this must either be named like the socket unit, but
-                with the suffix replaced; or it must be a template
-                file named the same way. Example: a socket file
+                for more information about .service files). The name
+                of the .service unit is by default the same as the
+                name of the .socket unit, but can be altered with the
+                <option>Service=</option> option described below.
+                Depending on the setting of the <option>Accept=</option>
+                option described below, this .service unit must either
+                be named like the .socket unit, but with the suffix
+                replaced, unless overridden with
+                <option>Service=</option>; or it must be a template
+                unit named the same way. Example: a socket file
                 <filename>foo.socket</filename> needs a matching
                 service <filename>foo.service</filename> if
                 <option>Accept=false</option> is set. If
-                <option>Accept=true</option> is set a service template
-                file <filename>foo@.service</filename> must exist from
-                which services are instantiated for each incoming
-                connection.</para>
+                <option>Accept=true</option> is set, a service
+                template file <filename>foo@.service</filename> must
+                exist from which services are instantiated for each
+                incoming connection.</para>
 
                 <para>Unless <varname>DefaultDependencies=</varname>
                 is set to <option>false</option>, socket units will
@@ -113,9 +121,21 @@
                 boot or late system shutdown should disable this
                 option.</para>
 
+                <para>Socket units will have a
+                <varname>Before=</varname> dependency on the service
+                which they trigger added implicitly. No implicit
+                <varname>WantedBy=</varname> or
+                <varname>RequiredBy=</varname> dependency from the
+                socket to the service is added. This means that the
+                service may be started without the socket, in which
+                case it must be able to open sockets by itself. To
+                prevent this, an explicit <varname>Requires=</varname>
+                dependency may be added.</para>
+
                 <para>Socket units may be used to implement on-demand
                 starting of services, as well as parallelized starting
-                of services.</para>
+                of services. See the blog stories linked at the end
+                for an introduction.</para>
 
                 <para>Note that the daemon software configured for
                 socket activation with socket units needs to be able
@@ -124,8 +144,8 @@
                 <citerefentry><refentrytitle>sd_listen_fds</refentrytitle><manvolnum>3</manvolnum></citerefentry>
                 for details) or via the traditional
                 <citerefentry><refentrytitle>inetd</refentrytitle><manvolnum>8</manvolnum></citerefentry>-style
-                socket passing (i.e. sockets passed in via STDIN and
-                STDOUT, using <varname>StandardInput=socket</varname>
+                socket passing (i.e. sockets passed in via standard input and
+                output, using <varname>StandardInput=socket</varname>
                 in the service file).</para>
         </refsect1>
 
@@ -150,26 +170,28 @@
                                 <term><varname>ListenSequentialPacket=</varname></term>
                                 <listitem><para>Specifies an address
                                 to listen on for a stream
-                                (SOCK_STREAM), datagram (SOCK_DGRAM),
+                                (<constant>SOCK_STREAM</constant>), datagram (<constant>SOCK_DGRAM</constant>),
                                 or sequential packet
-                                (SOCK_SEQPACKET) socket, respectively. The address
+                                (<constant>SOCK_SEQPACKET</constant>) socket, respectively. The address
                                 can be written in various formats:</para>
 
                                 <para>If the address starts with a
-                                slash (/), it is read as file system
-                                socket in the AF_UNIX socket
+                                slash (<literal>/</literal>), it is read as file system
+                                socket in the <constant>AF_UNIX</constant> socket
                                 family.</para>
 
-                                <para>If the address starts with an
-                                at symbol (@) it is read as abstract
-                                namespace socket in the AF_UNIX
-                                family. The @ is replaced with a NUL
-                                character before binding. For details
-                                see
+                                <para>If the address starts with an at
+                                symbol (<literal>@</literal>), it is read as abstract
+                                namespace socket in the
+                                <constant>AF_UNIX</constant>
+                                family. The <literal>@</literal> is
+                                replaced with a
+                                <constant>NUL</constant> character
+                                before binding. For details, see
                                 <citerefentry><refentrytitle>unix</refentrytitle><manvolnum>7</manvolnum></citerefentry>.</para>
 
                                 <para>If the address string is a
-                                single number it is read as port
+                                single number, it is read as port
                                 number to listen on via
                                 IPv6. Depending on the value of
                                 <varname>BindIPv6Only=</varname> (see below) this
@@ -179,13 +201,13 @@
                                 </para>
 
                                 <para>If the address string is a
-                                string in the format v.w.x.y:z it is
+                                string in the format v.w.x.y:z, it is
                                 read as IPv4 specifier for listening
                                 on an address v.w.x.y on a port
                                 z.</para>
 
                                 <para>If the address string is a
-                                string in the format [x]:y it is read
+                                string in the format [x]:y, it is read
                                 as IPv6 address x on a port y. Note
                                 that this might make the service
                                 available via IPv4, too, depending on
@@ -193,13 +215,13 @@
                                 setting (see below).
                                 </para>
 
-                                <para>Note that SOCK_SEQPACKET
+                                <para>Note that <constant>SOCK_SEQPACKET</constant>
                                 (i.e. <varname>ListenSequentialPacket=</varname>)
-                                is only available for AF_UNIX
-                                sockets. SOCK_STREAM
+                                is only available for <constant>AF_UNIX</constant>
+                                sockets. <constant>SOCK_STREAM</constant>
                                 (i.e. <varname>ListenStream=</varname>)
                                 when used for IP sockets refers to TCP
-                                sockets, SOCK_DGRAM
+                                sockets, <constant>SOCK_DGRAM</constant>
                                 (i.e. <varname>ListenDatagram=</varname>)
                                 to UDP.</para>
 
@@ -208,7 +230,7 @@
                                 traffic on any of the sockets will
                                 trigger service activation, and all
                                 listed sockets will be passed to the
-                                service, regardless whether there is
+                                service, regardless of whether there is
                                 incoming traffic on them or not. If
                                 the empty string is assigned to any of
                                 these options, the list of addresses
@@ -216,12 +238,23 @@
                                 of any of these options will have no
                                 effect.</para>
 
+                                <para>It is also possible to have more
+                                than one socket unit for the same
+                                service when using
+                                <varname>Service=</varname>, and the
+                                service will receive all the sockets
+                                configured in all the socket units.
+                                Sockets configured in one unit are
+                                passed in the order of configuration,
+                                but no ordering between socket units
+                                is specified.</para>
+
                                 <para>If an IP address is used here,
                                 it is often desirable to listen on it
                                 before the interface it is configured
                                 on is up and running, and even
-                                regardless whether it will be up and
-                                running ever at all. To deal with this
+                                regardless of whether it will be up and
+                                running at any point. To deal with this,
                                 it is recommended to set the
                                 <varname>FreeBind=</varname> option
                                 described below.</para></listitem>
@@ -258,7 +291,7 @@
                                 <listitem><para>Specifies a Netlink
                                 family to create a socket for to
                                 listen on. This expects a short string
-                                referring to the AF_NETLINK family
+                                referring to the <constant>AF_NETLINK</constant> family
                                 name (such as <varname>audit</varname>
                                 or <varname>kobject-uevent</varname>)
                                 as argument, optionally suffixed by a
@@ -298,7 +331,7 @@
                                 <option>ipv6-only</option>, they will
                                 be accessible via IPv6 only. If
                                 <option>default</option> (which is the
-                                default, surprise!) the system wide
+                                default, surprise!), the system wide
                                 default setting is used, as controlled
                                 by
                                 <filename>/proc/sys/net/ipv6/bindv6only</filename>,
@@ -325,7 +358,7 @@
                                 <term><varname>BindToDevice=</varname></term>
                                 <listitem><para>Specifies a network
                                 interface name to bind this socket
-                                to. If set traffic will only be
+                                to. If set, traffic will only be
                                 accepted from the specified network
                                 interfaces. This controls the
                                 SO_BINDTODEVICE socket option (see
@@ -336,6 +369,35 @@
                                 device unit
                                 (<citerefentry><refentrytitle>systemd.device</refentrytitle><manvolnum>5</manvolnum></citerefentry>
                                 is created.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><varname>SocketUser=</varname></term>
+                                <term><varname>SocketGroup=</varname></term>
+
+                                <listitem><para>Takes a UNIX
+                                user/group name. When specified,
+                                all AF_UNIX sockets and FIFO nodes in
+                                the file system are owned by the
+                                specified user and group. If unset
+                                (the default), the nodes are owned by
+                                the root user/group (if run in system
+                                context) or the invoking user/group
+                                (if run in user context). If only a
+                                user is specified but no group, then
+                                the group is derived from the user's
+                                default group.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><varname>SocketMode=</varname></term>
+                                <listitem><para>If listening on a file
+                                system socket or FIFO, this option
+                                specifies the file system access mode
+                                used when creating the file
+                                node. Takes an access mode in octal
+                                notation. Defaults to
+                                0666.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -352,17 +414,6 @@
                         </varlistentry>
 
                         <varlistentry>
-                                <term><varname>SocketMode=</varname></term>
-                                <listitem><para>If listening on a file
-                                system socket or FIFO, this option
-                                specifies the file system access mode
-                                used when creating the file
-                                node. Takes an access mode in octal
-                                notation. Defaults to
-                                0666.</para></listitem>
-                        </varlistentry>
-
-                        <varlistentry>
                                 <term><varname>Accept=</varname></term>
                                 <listitem><para>Takes a boolean
                                 argument. If true, a service instance
@@ -374,17 +425,30 @@
                                 and only one service unit is spawned
                                 for all connections (also see
                                 above). This value is ignored for
-                                datagram sockets and FIFOs where
-                                a single service unit unconditionally
+                                datagram sockets and FIFOs where a
+                                single service unit unconditionally
                                 handles all incoming traffic. Defaults
                                 to <option>false</option>. For
                                 performance reasons, it is recommended
                                 to write new daemons only in a way
                                 that is suitable for
-                                <option>Accept=false</option>. This
-                                option is mostly useful to allow
-                                daemons designed for usage with
-                                <citerefentry><refentrytitle>inetd</refentrytitle><manvolnum>8</manvolnum></citerefentry>,
+                                <option>Accept=false</option>. A
+                                daemon listening on an <constant>AF_UNIX</constant> socket
+                                may, but does not need to, call
+                                <citerefentry><refentrytitle>close</refentrytitle><manvolnum>2</manvolnum></citerefentry>
+                                on the received socket before
+                                exiting. However, it must not unlink
+                                the socket from a file system. It
+                                should not invoke
+                                <citerefentry><refentrytitle>shutdown</refentrytitle><manvolnum>2</manvolnum></citerefentry>
+                                on sockets it got with
+                                <varname>Accept=false</varname>, but
+                                it may do so for sockets it got with
+                                <varname>Accept=true</varname> set.
+                                Setting <varname>Accept=true</varname>
+                                is mostly useful to allow daemons
+                                designed for usage with
+                                <citerefentry><refentrytitle>inetd</refentrytitle><manvolnum>8</manvolnum></citerefentry>
                                 to work unmodified with systemd socket
                                 activation.</para></listitem>
                         </varlistentry>
@@ -399,7 +463,7 @@
                                 are coming in, they will be refused
                                 until at least one existing connection
                                 is terminated. This setting has no
-                                effect for sockets configured with
+                                effect on sockets configured with
                                 <option>Accept=false</option> or datagram
                                 sockets. Defaults to
                                 64.</para></listitem>
@@ -438,12 +502,15 @@
                                 <term><varname>ReceiveBuffer=</varname></term>
                                 <term><varname>SendBuffer=</varname></term>
                                 <listitem><para>Takes an integer
-                                argument controlling the receive
-                                or send buffer sizes of this
-                                socket, respectively. This controls the SO_RCVBUF
-                                and SO_SNDBUF socket options (see
+                                argument controlling the receive or
+                                send buffer sizes of this socket,
+                                respectively. This controls the
+                                SO_RCVBUF and SO_SNDBUF socket options
+                                (see
                                 <citerefentry><refentrytitle>socket</refentrytitle><manvolnum>7</manvolnum></citerefentry>
-                                for details.).</para></listitem>
+                                for details.). The usual suffixes K,
+                                M, G are supported and are understood
+                                to the base of 1024.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -490,6 +557,17 @@
                         </varlistentry>
 
                         <varlistentry>
+                                <term><varname>ReusePort=</varname></term>
+                                <listitem><para>Takes a boolean
+                                value. If true, allows multiple <citerefentry><refentrytitle>bind</refentrytitle><manvolnum>2</manvolnum></citerefentry>s
+                                to this TCP or UDP port.  This
+                                controls the SO_REUSEPORT socket
+                                option.  See
+                                <citerefentry><refentrytitle>socket</refentrytitle><manvolnum>7</manvolnum></citerefentry>
+                                for details.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
                                 <term><varname>SmackLabel=</varname></term>
                                 <term><varname>SmackLabelIPIn=</varname></term>
                                 <term><varname>SmackLabelIPOut=</varname></term>
@@ -503,7 +581,7 @@
                                 respectively, i.e. the security label
                                 of the FIFO, or the security label for
                                 the incoming or outgoing connections
-                                of the socket, respectively.  See
+                                of the socket, respectively. See
                                 <ulink
                                 url="https://www.kernel.org/doc/Documentation/security/Smack.txt">Smack.txt</ulink>
                                 for details.</para></listitem>
@@ -511,12 +589,14 @@
 
                         <varlistentry>
                                 <term><varname>PipeSize=</varname></term>
-                                <listitem><para>Takes an integer
-                                value. Controls the pipe buffer size
+                                <listitem><para>Takes a size in
+                                bytes. Controls the pipe buffer size
                                 of FIFOs configured in this socket
-                                unit.  See
+                                unit. See
                                 <citerefentry><refentrytitle>fcntl</refentrytitle><manvolnum>2</manvolnum></citerefentry>
-                                for details.</para></listitem>
+                                for details. The usual suffixes K, M,
+                                G are supported and are understood to
+                                the base of 1024.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -571,7 +651,7 @@
                                 <term><varname>PassCredentials=</varname></term>
                                 <listitem><para>Takes a boolean
                                 value. This controls the SO_PASSCRED
-                                socket option, which allows AF_UNIX sockets to
+                                socket option, which allows <constant>AF_UNIX</constant> sockets to
                                 receive the credentials of the sending
                                 process in an ancillary message.
                                 Defaults to
@@ -582,10 +662,10 @@
                                 <term><varname>PassSecurity=</varname></term>
                                 <listitem><para>Takes a boolean
                                 value. This controls the SO_PASSSEC
-                                socket option, which allows AF_UNIX
+                                socket option, which allows <constant>AF_UNIX</constant>
                                 sockets to receive the security
                                 context of the sending process in an
-                                ancillary message.  Defaults to
+                                ancillary message. Defaults to
                                 <option>false</option>.</para></listitem>
                         </varlistentry>
 
@@ -609,7 +689,7 @@
                                 before or after the listening
                                 sockets/FIFOs are created and
                                 bound, respectively. The first token of the command
-                                line must be an absolute file name,
+                                line must be an absolute filename,
                                 then followed by arguments for the
                                 process. Multiple command lines may be
                                 specified following the same scheme as
@@ -644,25 +724,65 @@
                                 will be considered failed and be shut
                                 down again. All commands still running,
                                 will be terminated forcibly via
-                                SIGTERM, and after another delay of
-                                this time with SIGKILL. (See
+                                <constant>SIGTERM</constant>, and after another delay of
+                                this time with <constant>SIGKILL</constant>. (See
                                 <option>KillMode=</option> in <citerefentry><refentrytitle>systemd.kill</refentrytitle><manvolnum>5</manvolnum></citerefentry>.)
                                 Takes a unit-less value in seconds, or
                                 a time span value such as "5min
                                 20s". Pass 0 to disable the timeout
-                                logic. Defaults to
-                                90s.</para></listitem>
+                                logic. Defaults to <varname>TimeoutStartSec=</varname> from the
+                                manager configuration file.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><varname>Service=</varname></term>
                                 <listitem><para>Specifies the service
                                 unit name to activate on incoming
-                                traffic. This defaults to the service
-                                that bears the same name as the socket
-                                (ignoring the different suffixes). In
-                                most cases it should not be necessary
-                                to use this option.</para></listitem>
+                                traffic. This setting is only allowed
+                                for sockets with
+                                <varname>Accept=no</varname>. It
+                                defaults to the service that bears the
+                                same name as the socket (with the
+                                suffix replaced). In most cases, it
+                                should not be necessary to use this
+                                option.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><varname>RemoveOnStop=</varname></term>
+                                <listitem><para>Takes a boolean
+                                argument. If enabled, any file nodes
+                                created by this socket unit are
+                                removed when it is stopped. This
+                                applies to AF_UNIX sockets in the file
+                                system, POSIX message queues, FIFOs,
+                                as well as any symlinks to
+                                them configured with
+                                <varname>Symlinks=</varname>. Normally,
+                                it should not be necessary to use this
+                                option, and is not recommended as
+                                services might continue to run after
+                                the socket unit has been terminated
+                                and it should still be possible to
+                                communicate with them via their file
+                                system node. Defaults to
+                                off.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><varname>Symlinks=</varname></term>
+                                <listitem><para>Takes a list of file
+                                system paths. The specified paths will
+                                be created as symlinks to the AF_UNIX
+                                socket path or FIFO path of this
+                                socket unit.  If this setting is used,
+                                only one AF_UNIX socket in the file
+                                system or one FIFO may be configured
+                                for the socket unit. Use this option
+                                to manage one or more symlinked alias
+                                names for a socket, binding their
+                                lifecycle together. Defaults to the
+                                empty list.</para></listitem>
                         </varlistentry>
 
                 </variablelist>
@@ -679,16 +799,17 @@
                   <title>See Also</title>
                   <para>
                           <citerefentry><refentrytitle>systemd</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
-                          <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>8</manvolnum></citerefentry>,
+                          <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
                           <citerefentry><refentrytitle>systemd.unit</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
                           <citerefentry><refentrytitle>systemd.exec</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
                           <citerefentry><refentrytitle>systemd.kill</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+                          <citerefentry><refentrytitle>systemd.resource-control</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
                           <citerefentry><refentrytitle>systemd.service</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
                           <citerefentry><refentrytitle>systemd.directives</refentrytitle><manvolnum>7</manvolnum></citerefentry>
                   </para>
 
                   <para>
-                          For more extensive descriptions see the "Systemd for Developers" series:
+                          For more extensive descriptions see the "systemd for Developers" series:
                           <ulink url="http://0pointer.de/blog/projects/socket-activation.html">Socket Activation</ulink>,
                           <ulink url="http://0pointer.de/blog/projects/socket-activation2.html">Socket Activation, part II</ulink>,
                           <ulink url="http://0pointer.de/blog/projects/inetd.html">Converting inetd Services</ulink>,

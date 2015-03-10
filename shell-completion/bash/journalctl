@@ -18,9 +18,10 @@
 # along with systemd; If not, see <http://www.gnu.org/licenses/>.
 
 __contains_word () {
-        local word=$1; shift
-        for w in $*; do [[ $w = $word ]] && return 0; done
-        return 1
+        local w word=$1; shift
+        for w in "$@"; do
+                [[ $w = "$word" ]] && return
+        done
 }
 
 __journal_fields=(MESSAGE{,_ID} PRIORITY CODE_{FILE,LINE,FUNC}
@@ -34,23 +35,33 @@ __journal_fields=(MESSAGE{,_ID} PRIORITY CODE_{FILE,LINE,FUNC}
                   _UDEV_{SYSNAME,DEVNODE,DEVLINK}
                   __CURSOR __{REALTIME,MONOTONIC}_TIMESTAMP)
 
+__syslog_priorities=(emerg alert crit err warning notice info debug)
+
 _journalctl() {
         local field_vals= cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
         local -A OPTS=(
-                [STANDALONE]='-a --all --full
-                              -b --this-boot --disk-usage -f --follow --header
+                [STANDALONE]='-a --all --full --system --user
+                              --disk-usage -f --follow --header
                               -h --help -l --local --new-id128 -m --merge --no-pager
                               --no-tail -q --quiet --setup-keys --this-boot --verify
-                              --version --list-catalog --update-catalog'
-                       [ARG]='-D --directory -F --field -o --output -u --unit --user-unit'
-                [ARGUNKNOWN]='-c --cursor --interval -n --lines -p --priority --since --until
+                              --version --list-catalog --update-catalog --list-boots'
+                       [ARG]='-b --boot --this-boot -D --directory --file -F --field
+                              -o --output -u --unit --user-unit -p --priority'
+                [ARGUNKNOWN]='-c --cursor --interval -n --lines --since --until
                               --verify-key'
         )
 
         if __contains_word "$prev" ${OPTS[ARG]} ${OPTS[ARGUNKNOWN]}; then
                 case $prev in
+                        --boot|--this-boot|-b)
+                                comps=$(journalctl -F '_BOOT_ID' 2>/dev/null)
+                        ;;
                         --directory|-D)
                                 comps=$(compgen -d -- "$cur")
+                                compopt -o filenames
+                        ;;
+                        --file)
+                                comps=$(compgen -f -- "$cur")
                                 compopt -o filenames
                         ;;
                         --output|-o)
@@ -58,6 +69,9 @@ _journalctl() {
                         ;;
                         --field|-F)
                                 comps=${__journal_fields[*]}
+                        ;;
+                        --priority|-p)
+                                comps=${__syslog_priorities[*]}
                         ;;
                         --unit|-u)
                                 comps=$(journalctl -F '_SYSTEMD_UNIT' 2>/dev/null)

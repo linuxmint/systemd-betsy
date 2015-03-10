@@ -24,26 +24,30 @@
 #include <assert.h>
 
 #include "path-util.h"
+#include "bus-label.h"
 #include "util.h"
 #include "unit-name.h"
+#include "def.h"
+#include "strv.h"
 
 #define VALID_CHARS                             \
-        "0123456789"                            \
-        "abcdefghijklmnopqrstuvwxyz"            \
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"            \
+        DIGITS LETTERS                          \
         ":-_.\\"
 
 static const char* const unit_type_table[_UNIT_TYPE_MAX] = {
         [UNIT_SERVICE] = "service",
         [UNIT_SOCKET] = "socket",
+        [UNIT_BUSNAME] = "busname",
         [UNIT_TARGET] = "target",
+        [UNIT_SNAPSHOT] = "snapshot",
         [UNIT_DEVICE] = "device",
         [UNIT_MOUNT] = "mount",
         [UNIT_AUTOMOUNT] = "automount",
-        [UNIT_SNAPSHOT] = "snapshot",
-        [UNIT_TIMER] = "timer",
         [UNIT_SWAP] = "swap",
+        [UNIT_TIMER] = "timer",
         [UNIT_PATH] = "path",
+        [UNIT_SLICE] = "slice",
+        [UNIT_SCOPE] = "scope"
 };
 
 DEFINE_STRING_TABLE_LOOKUP(unit_type, UnitType);
@@ -51,6 +55,7 @@ DEFINE_STRING_TABLE_LOOKUP(unit_type, UnitType);
 static const char* const unit_load_state_table[_UNIT_LOAD_STATE_MAX] = {
         [UNIT_STUB] = "stub",
         [UNIT_LOADED] = "loaded",
+        [UNIT_NOT_FOUND] = "not-found",
         [UNIT_ERROR] = "error",
         [UNIT_MERGED] = "merged",
         [UNIT_MASKED] = "masked"
@@ -58,7 +63,7 @@ static const char* const unit_load_state_table[_UNIT_LOAD_STATE_MAX] = {
 
 DEFINE_STRING_TABLE_LOOKUP(unit_load_state, UnitLoadState);
 
-bool unit_name_is_valid(const char *n, bool template_ok) {
+bool unit_name_is_valid(const char *n, enum template_valid template_ok) {
         const char *e, *i, *at;
 
         /* Valid formats:
@@ -67,7 +72,10 @@ bool unit_name_is_valid(const char *n, bool template_ok) {
          *         string.suffix
          */
 
-        assert(n);
+        assert(IN_SET(template_ok, TEMPLATE_VALID, TEMPLATE_INVALID));
+
+        if (isempty(n))
+                return false;
 
         if (strlen(n) >= UNIT_NAME_MAX)
                 return false;
@@ -92,7 +100,7 @@ bool unit_name_is_valid(const char *n, bool template_ok) {
                 if (at == n)
                         return false;
 
-                if (!template_ok && at+1 == e)
+                if (!template_ok == TEMPLATE_VALID && at+1 == e)
                         return false;
         }
 
@@ -100,36 +108,27 @@ bool unit_name_is_valid(const char *n, bool template_ok) {
 }
 
 bool unit_instance_is_valid(const char *i) {
-        assert(i);
 
         /* The max length depends on the length of the string, so we
          * don't really check this here. */
 
-        if (i[0] == 0)
+        if (isempty(i))
                 return false;
 
         /* We allow additional @ in the instance string, we do not
          * allow them in the prefix! */
 
-        for (; *i; i++)
-                if (!strchr("@" VALID_CHARS, *i))
-                        return false;
-
-        return true;
+        return in_charset(i, "@" VALID_CHARS);
 }
 
 bool unit_prefix_is_valid(const char *p) {
 
         /* We don't allow additional @ in the instance string */
 
-        if (p[0] == 0)
+        if (isempty(p))
                 return false;
 
-        for (; *p; p++)
-                if (!strchr(VALID_CHARS, *p))
-                        return false;
-
-        return true;
+        return in_charset(p, VALID_CHARS);
 }
 
 int unit_name_to_instance(const char *n, char **instance) {
@@ -146,15 +145,18 @@ int unit_name_to_instance(const char *n, char **instance) {
                 return 0;
         }
 
-        assert_se(d = strrchr(n, '.'));
-        assert(p < d);
+        d = strrchr(n, '.');
+        if (!d)
+                return -EINVAL;
+        if (d < p)
+                return -EINVAL;
 
         i = strndup(p+1, d-p-1);
         if (!i)
                 return -ENOMEM;
 
         *instance = i;
-        return 0;
+        return 1;
 }
 
 char *unit_name_to_prefix_and_instance(const char *n) {
@@ -163,12 +165,13 @@ char *unit_name_to_prefix_and_instance(const char *n) {
         assert(n);
 
         assert_se(d = strrchr(n, '.'));
-
         return strndup(n, d - n);
 }
 
 char *unit_name_to_prefix(const char *n) {
         const char *p;
+
+        assert(n);
 
         p = strchr(n, '@');
         if (p)
@@ -182,8 +185,8 @@ char *unit_name_change_suffix(const char *n, const char *suffix) {
         size_t a, b;
 
         assert(n);
-        assert(unit_name_is_valid(n, true));
         assert(suffix);
+        assert(suffix[0] == '.');
 
         assert_se(e = strrchr(n, '.'));
         a = e - n;
@@ -193,16 +196,12 @@ char *unit_name_change_suffix(const char *n, const char *suffix) {
         if (!r)
                 return NULL;
 
-        memcpy(r, n, a);
-        memcpy(r+a, suffix, b+1);
-
+        strcpy(mempcpy(r, n, a), suffix);
         return r;
 }
 
 char *unit_name_build(const char *prefix, const char *instance, const char *suffix) {
         assert(prefix);
-        assert(unit_prefix_is_valid(prefix));
-        assert(!instance || unit_instance_is_valid(instance));
         assert(suffix);
 
         if (!instance)
@@ -212,10 +211,13 @@ char *unit_name_build(const char *prefix, const char *instance, const char *suff
 }
 
 static char *do_escape_char(char c, char *t) {
+        assert(t);
+
         *(t++) = '\\';
         *(t++) = 'x';
         *(t++) = hexchar(c >> 4);
         *(t++) = hexchar(c);
+
         return t;
 }
 
@@ -243,6 +245,8 @@ static char *do_escape(const char *f, char *t) {
 
 char *unit_name_escape(const char *f) {
         char *r, *t;
+
+        assert(f);
 
         r = new(char, strlen(f)*4+1);
         if (!r)
@@ -288,7 +292,7 @@ char *unit_name_unescape(const char *f) {
 }
 
 char *unit_name_path_escape(const char *f) {
-        char *p, *e;
+        _cleanup_free_ char *p = NULL;
 
         assert(f);
 
@@ -298,19 +302,14 @@ char *unit_name_path_escape(const char *f) {
 
         path_kill_slashes(p);
 
-        if (streq(p, "/")) {
-                free(p);
+        if (STR_IN_SET(p, "/", ""))
                 return strdup("-");
-        }
 
-        e = unit_name_escape(p[0] == '/' ? p + 1 : p);
-        free(p);
-
-        return e;
+        return unit_name_escape(p[0] == '/' ? p + 1 : p);
 }
 
 char *unit_name_path_unescape(const char *f) {
-        char *e;
+        char *e, *w;
 
         assert(f);
 
@@ -319,11 +318,8 @@ char *unit_name_path_unescape(const char *f) {
                 return NULL;
 
         if (e[0] != '/') {
-                char *w;
-
                 w = strappend("/", e);
                 free(e);
-
                 return w;
         }
 
@@ -331,7 +327,7 @@ char *unit_name_path_unescape(const char *f) {
 }
 
 bool unit_name_is_template(const char *n) {
-        const char *p;
+        const char *p, *e;
 
         assert(n);
 
@@ -339,11 +335,15 @@ bool unit_name_is_template(const char *n) {
         if (!p)
                 return false;
 
-        return p[1] == '.';
+        e = strrchr(p+1, '.');
+        if (!e)
+                return false;
+
+        return e == p + 1;
 }
 
 bool unit_name_is_instance(const char *n) {
-        const char *p;
+        const char *p, *e;
 
         assert(n);
 
@@ -351,13 +351,44 @@ bool unit_name_is_instance(const char *n) {
         if (!p)
                 return false;
 
-        return p[1] != '.';
+        e = strrchr(p+1, '.');
+        if (!e)
+                return false;
+
+        return e > p + 1;
 }
 
 char *unit_name_replace_instance(const char *f, const char *i) {
         const char *p, *e;
-        char *r, *k;
+        char *r;
         size_t a, b;
+
+        assert(f);
+        assert(i);
+
+        p = strchr(f, '@');
+        if (!p)
+                return strdup(f);
+
+        e = strrchr(f, '.');
+        if (!e)
+                e = strchr(f, 0);
+
+        a = p - f;
+        b = strlen(i);
+
+        r = new(char, a + 1 + b + strlen(e) + 1);
+        if (!r)
+                return NULL;
+
+        strcpy(mempcpy(mempcpy(r, f, a + 1), i, b), e);
+        return r;
+}
+
+char *unit_name_template(const char *f) {
+        const char *p, *e;
+        char *r;
+        size_t a;
 
         assert(f);
 
@@ -367,45 +398,20 @@ char *unit_name_replace_instance(const char *f, const char *i) {
 
         e = strrchr(f, '.');
         if (!e)
-                assert_se(e = strchr(f, 0));
+                e = strchr(f, 0);
 
         a = p - f;
-        b = strlen(i);
 
-        r = new(char, a + 1 + b + strlen(e) + 1);
+        r = new(char, a + 1 + strlen(e) + 1);
         if (!r)
                 return NULL;
 
-        k = mempcpy(r, f, a + 1);
-        k = mempcpy(k, i, b);
-        strcpy(k, e);
-
+        strcpy(mempcpy(r, f, a + 1), e);
         return r;
-}
-
-char *unit_name_template(const char *f) {
-        const char *p, *e;
-        char *r;
-        size_t a;
-
-        p = strchr(f, '@');
-        if (!p)
-                return strdup(f);
-
-        assert_se(e = strrchr(f, '.'));
-        a = p - f + 1;
-
-        r = new(char, a + strlen(e) + 1);
-        if (!r)
-                return NULL;
-
-        strcpy(mempcpy(r, f, a), e);
-        return r;
-
 }
 
 char *unit_name_from_path(const char *path, const char *suffix) {
-        char *p, *r;
+        _cleanup_free_ char *p = NULL;
 
         assert(path);
         assert(suffix);
@@ -414,14 +420,11 @@ char *unit_name_from_path(const char *path, const char *suffix) {
         if (!p)
                 return NULL;
 
-        r = strappend(p, suffix);
-        free(p);
-
-        return r;
+        return strappend(p, suffix);
 }
 
 char *unit_name_from_path_instance(const char *prefix, const char *path, const char *suffix) {
-        char *p, *r;
+        _cleanup_free_ char *p = NULL;
 
         assert(prefix);
         assert(path);
@@ -431,14 +434,11 @@ char *unit_name_from_path_instance(const char *prefix, const char *path, const c
         if (!p)
                 return NULL;
 
-        r = strjoin(prefix, "@", p, suffix, NULL);
-        free(p);
-
-        return r;
+        return strjoin(prefix, "@", p, suffix, NULL);
 }
 
 char *unit_name_to_path(const char *name) {
-        char *w, *e;
+        _cleanup_free_ char *w = NULL;
 
         assert(name);
 
@@ -446,35 +446,47 @@ char *unit_name_to_path(const char *name) {
         if (!w)
                 return NULL;
 
-        e = unit_name_path_unescape(w);
-        free(w);
-
-        return e;
+        return unit_name_path_unescape(w);
 }
 
 char *unit_dbus_path_from_name(const char *name) {
-        char *e, *p;
+        _cleanup_free_ char *e = NULL;
 
         assert(name);
 
-        e = bus_path_escape(name);
+        e = bus_label_escape(name);
         if (!e)
                 return NULL;
 
-        p = strappend("/org/freedesktop/systemd1/unit/", e);
-        free(e);
-
-        return p;
+        return strappend("/org/freedesktop/systemd1/unit/", e);
 }
 
-char *unit_name_mangle(const char *name) {
+int unit_name_from_dbus_path(const char *path, char **name) {
+        const char *e;
+        char *n;
+
+        e = startswith(path, "/org/freedesktop/systemd1/unit/");
+        if (!e)
+                return -EINVAL;
+
+        n = bus_label_unescape(e);
+        if (!n)
+                return -ENOMEM;
+
+        *name = n;
+        return 0;
+}
+
+/**
+ *  Try to turn a string that might not be a unit name into a
+ *  sensible unit name.
+ */
+char *unit_name_mangle(const char *name, enum unit_name_mangle allow_globs) {
+        const char *valid_chars, *f;
         char *r, *t;
-        const char *f;
 
         assert(name);
-
-        /* Try to turn a string that might not be a unit name into a
-         * sensible unit name. */
+        assert(IN_SET(allow_globs, MANGLE_GLOB, MANGLE_NOGLOB));
 
         if (is_device_path(name))
                 return unit_name_from_path(name, ".device");
@@ -485,14 +497,16 @@ char *unit_name_mangle(const char *name) {
         /* We'll only escape the obvious characters here, to play
          * safe. */
 
-        r = new(char, strlen(name) * 4 + 1 + sizeof(".service")-1);
+        valid_chars = allow_globs == MANGLE_GLOB ? "@" VALID_CHARS "[]!-*?" : "@" VALID_CHARS;
+
+        r = new(char, strlen(name) * 4 + strlen(".service") + 1);
         if (!r)
                 return NULL;
 
         for (f = name, t = r; *f; f++) {
                 if (*f == '/')
                         *(t++) = '-';
-                else if (!strchr("@" VALID_CHARS, *f))
+                else if (!strchr(valid_chars, *f))
                         t = do_escape_char(*f, t);
                 else
                         *(t++) = *f;
@@ -506,16 +520,20 @@ char *unit_name_mangle(const char *name) {
         return r;
 }
 
-char *snapshot_name_mangle(const char *name) {
+/**
+ *  Similar to unit_name_mangle(), but is called when we know
+ *  that this is about a specific unit type.
+ */
+char *unit_name_mangle_with_suffix(const char *name, enum unit_name_mangle allow_globs, const char *suffix) {
         char *r, *t;
         const char *f;
 
         assert(name);
+        assert(IN_SET(allow_globs, MANGLE_GLOB, MANGLE_NOGLOB));
+        assert(suffix);
+        assert(suffix[0] == '.');
 
-        /* Similar to unit_name_mangle(), but is called when we know
-         * that this is about snapshot units. */
-
-        r = new(char, strlen(name) * 4 + 1 + sizeof(".snapshot")-1);
+        r = new(char, strlen(name) * 4 + strlen(suffix) + 1);
         if (!r)
                 return NULL;
 
@@ -528,8 +546,8 @@ char *snapshot_name_mangle(const char *name) {
                         *(t++) = *f;
         }
 
-        if (!endswith(name, ".snapshot"))
-                strcpy(t, ".snapshot");
+        if (!endswith(name, suffix))
+                strcpy(t, suffix);
         else
                 *t = 0;
 
@@ -546,4 +564,31 @@ UnitType unit_name_to_type(const char *n) {
                 return _UNIT_TYPE_INVALID;
 
         return unit_type_from_string(e + 1);
+}
+
+int build_subslice(const char *slice, const char*name, char **subslice) {
+        char *ret;
+
+        assert(slice);
+        assert(name);
+        assert(subslice);
+
+        if (streq(slice, "-.slice"))
+                ret = strappend(name, ".slice");
+        else {
+                char *e;
+
+                e = endswith(slice, ".slice");
+                if (!e)
+                        return -EINVAL;
+
+                ret = new(char, (e - slice) + 1 + strlen(name) + 6 + 1);
+                if (!ret)
+                        return -ENOMEM;
+
+                stpcpy(stpcpy(stpcpy(mempcpy(ret, slice, e - slice), "-"), name), ".slice");
+        }
+
+        *subslice = ret;
+        return 0;
 }

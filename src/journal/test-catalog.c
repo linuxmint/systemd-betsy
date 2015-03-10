@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #include "util.h"
 #include "log.h"
@@ -31,11 +32,23 @@
 #include "sd-messages.h"
 #include "catalog.h"
 
+static const char *catalog_dirs[] = {
+        CATALOG_DIR,
+        NULL,
+};
+
+static const char *no_catalog_dirs[] = {
+        "/bin/hopefully/with/no/catalog",
+        NULL
+};
+
 static void test_import(Hashmap *h, struct strbuf *sb,
                         const char* contents, ssize_t size, int code) {
         int r;
         char name[] = "/tmp/test-catalog.XXXXXX";
-        _cleanup_close_ int fd = mkstemp(name);
+        _cleanup_close_ int fd;
+
+        fd = mkostemp_safe(name, O_RDWR|O_CLOEXEC);
         assert(fd >= 0);
         assert_se(write(fd, contents, size) == size);
 
@@ -88,10 +101,10 @@ static void test_catalog_importing(void) {
 static const char* database = NULL;
 
 static void test_catalog_update(void) {
+        static char name[] = "/tmp/test-catalog.XXXXXX";
         int r;
 
-        static char name[] = "/tmp/test-catalog.XXXXXX";
-        r = mkstemp(name);
+        r = mkostemp_safe(name, O_RDWR|O_CLOEXEC);
         assert(r >= 0);
 
         database = name;
@@ -100,10 +113,42 @@ static void test_catalog_update(void) {
         r = catalog_update(database, NULL, NULL);
         assert(r >= 0);
 
-        /* Note: this might actually not find anything, if systemd was
-         * not installed before. That should be fine too. */
-        r = catalog_update(database, NULL, catalog_file_dirs);
+        /* Test what happens if there are no files in the directory. */
+        r = catalog_update(database, NULL, no_catalog_dirs);
         assert(r >= 0);
+
+        /* Make sure that we at least have some files loaded or the
+           catalog_list below will fail. */
+        r = catalog_update(database, NULL, catalog_dirs);
+        assert(r >= 0);
+}
+
+static void test_catalog_file_lang(void) {
+        _cleanup_free_ char *lang = NULL, *lang2 = NULL, *lang3 = NULL, *lang4 = NULL;
+
+        assert_se(catalog_file_lang("systemd.de_DE.catalog", &lang) == 1);
+        assert_se(streq(lang, "de_DE"));
+
+        assert_se(catalog_file_lang("systemd..catalog", &lang2) == 0);
+        assert_se(lang2 == NULL);
+
+        assert_se(catalog_file_lang("systemd.fr.catalog", &lang2) == 1);
+        assert_se(streq(lang2, "fr"));
+
+        assert_se(catalog_file_lang("systemd.fr.catalog.gz", &lang3) == 0);
+        assert_se(lang3 == NULL);
+
+        assert_se(catalog_file_lang("systemd.01234567890123456789012345678901.catalog", &lang3) == 0);
+        assert_se(lang3 == NULL);
+
+        assert_se(catalog_file_lang("systemd.0123456789012345678901234567890.catalog", &lang3) == 1);
+        assert_se(streq(lang3, "0123456789012345678901234567890"));
+
+        assert_se(catalog_file_lang("/x/y/systemd.catalog", &lang4) == 0);
+        assert_se(lang4 == NULL);
+
+        assert_se(catalog_file_lang("/x/y/systemd.ru_RU.catalog", &lang4) == 1);
+        assert_se(streq(lang4, "ru_RU"));
 }
 
 int main(int argc, char *argv[]) {
@@ -112,7 +157,10 @@ int main(int argc, char *argv[]) {
 
         setlocale(LC_ALL, "de_DE.UTF-8");
 
-        log_set_max_level(LOG_DEBUG);
+        log_parse_environment();
+        log_open();
+
+        test_catalog_file_lang();
 
         test_catalog_importing();
 

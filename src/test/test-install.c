@@ -58,7 +58,7 @@ int main(int argc, char* argv[]) {
         HASHMAP_FOREACH(p, h, i) {
                 UnitFileState s;
 
-                s = unit_file_get_state(UNIT_FILE_SYSTEM, NULL, path_get_file_name(p->path));
+                s = unit_file_get_state(UNIT_FILE_SYSTEM, NULL, basename(p->path));
 
                 assert_se(p->state == s);
 
@@ -176,7 +176,7 @@ int main(int argc, char* argv[]) {
         dump_changes(changes, n_changes);
         unit_file_changes_free(changes, n_changes);
 
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, path_get_file_name(files2[0])) == UNIT_FILE_ENABLED);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, basename(files2[0])) == UNIT_FILE_ENABLED);
 
         log_error("disable files2");
         changes = NULL;
@@ -188,7 +188,7 @@ int main(int argc, char* argv[]) {
         dump_changes(changes, n_changes);
         unit_file_changes_free(changes, n_changes);
 
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, path_get_file_name(files2[0])) == _UNIT_FILE_STATE_INVALID);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, basename(files2[0])) == _UNIT_FILE_STATE_INVALID);
 
         log_error("link files2");
         changes = NULL;
@@ -200,7 +200,7 @@ int main(int argc, char* argv[]) {
         dump_changes(changes, n_changes);
         unit_file_changes_free(changes, n_changes);
 
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, path_get_file_name(files2[0])) == UNIT_FILE_LINKED);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, basename(files2[0])) == UNIT_FILE_LINKED);
 
         log_error("disable files2");
         changes = NULL;
@@ -212,7 +212,7 @@ int main(int argc, char* argv[]) {
         dump_changes(changes, n_changes);
         unit_file_changes_free(changes, n_changes);
 
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, path_get_file_name(files2[0])) == _UNIT_FILE_STATE_INVALID);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, basename(files2[0])) == _UNIT_FILE_STATE_INVALID);
 
         log_error("link files2");
         changes = NULL;
@@ -224,7 +224,7 @@ int main(int argc, char* argv[]) {
         dump_changes(changes, n_changes);
         unit_file_changes_free(changes, n_changes);
 
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, path_get_file_name(files2[0])) == UNIT_FILE_LINKED);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, basename(files2[0])) == UNIT_FILE_LINKED);
 
         log_error("reenable files2");
         changes = NULL;
@@ -236,7 +236,7 @@ int main(int argc, char* argv[]) {
         dump_changes(changes, n_changes);
         unit_file_changes_free(changes, n_changes);
 
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, path_get_file_name(files2[0])) == UNIT_FILE_ENABLED);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, basename(files2[0])) == UNIT_FILE_ENABLED);
 
         log_error("disable files2");
         changes = NULL;
@@ -248,18 +248,18 @@ int main(int argc, char* argv[]) {
         dump_changes(changes, n_changes);
         unit_file_changes_free(changes, n_changes);
 
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, path_get_file_name(files2[0])) == _UNIT_FILE_STATE_INVALID);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, basename(files2[0])) == _UNIT_FILE_STATE_INVALID);
         log_error("preset files");
         changes = NULL;
         n_changes = 0;
 
-        r = unit_file_preset(UNIT_FILE_SYSTEM, false, NULL, (char**) files, false, &changes, &n_changes);
+        r = unit_file_preset(UNIT_FILE_SYSTEM, false, NULL, (char**) files, UNIT_FILE_PRESET_FULL, false, &changes, &n_changes);
         assert_se(r >= 0);
 
         dump_changes(changes, n_changes);
         unit_file_changes_free(changes, n_changes);
 
-        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, path_get_file_name(files[0])) == UNIT_FILE_ENABLED);
+        assert_se(unit_file_get_state(UNIT_FILE_SYSTEM, NULL, basename(files[0])) == UNIT_FILE_ENABLED);
 
         return 0;
 }

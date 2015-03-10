@@ -58,41 +58,41 @@
 
                         <funcprototype>
                                 <funcdef>int <function>sd_journal_get_data</function></funcdef>
-                                <paramdef>sd_journal* <parameter>j</parameter></paramdef>
-                                <paramdef>const char* <parameter>field</parameter></paramdef>
-                                <paramdef>const void** <parameter>data</parameter></paramdef>
-                                <paramdef>size_t* <parameter>length</parameter></paramdef>
+                                <paramdef>sd_journal *<parameter>j</parameter></paramdef>
+                                <paramdef>const char *<parameter>field</parameter></paramdef>
+                                <paramdef>const void **<parameter>data</parameter></paramdef>
+                                <paramdef>size_t *<parameter>length</parameter></paramdef>
                         </funcprototype>
 
                         <funcprototype>
                                 <funcdef>int <function>sd_journal_enumerate_data</function></funcdef>
-                                <paramdef>sd_journal* <parameter>j</parameter></paramdef>
-                                <paramdef>const void** <parameter>data</parameter></paramdef>
-                                <paramdef>size_t* <parameter>length</parameter></paramdef>
+                                <paramdef>sd_journal *<parameter>j</parameter></paramdef>
+                                <paramdef>const void **<parameter>data</parameter></paramdef>
+                                <paramdef>size_t *<parameter>length</parameter></paramdef>
                         </funcprototype>
 
                         <funcprototype>
                                 <funcdef>void <function>sd_journal_restart_data</function></funcdef>
-                                <paramdef>sd_journal* <parameter>j</parameter></paramdef>
+                                <paramdef>sd_journal *<parameter>j</parameter></paramdef>
                         </funcprototype>
 
                         <funcprototype>
                                 <funcdef><function>SD_JOURNAL_FOREACH_DATA</function></funcdef>
-                                <paramdef>sd_journal* <parameter>j</parameter></paramdef>
-                                <paramdef>const void* <parameter>data</parameter></paramdef>
+                                <paramdef>sd_journal *<parameter>j</parameter></paramdef>
+                                <paramdef>const void *<parameter>data</parameter></paramdef>
                                 <paramdef>size_t <parameter>length</parameter></paramdef>
                         </funcprototype>
 
                         <funcprototype>
                                 <funcdef>int <function>sd_journal_set_data_threshold</function></funcdef>
-                                <paramdef>sd_journal* <parameter>j</parameter></paramdef>
+                                <paramdef>sd_journal *<parameter>j</parameter></paramdef>
                                 <paramdef>size_t <parameter>sz</parameter></paramdef>
                         </funcprototype>
 
                         <funcprototype>
                                 <funcdef>int <function>sd_journal_get_data_threshold</function></funcdef>
-                                <paramdef>sd_journal* <parameter>j</parameter></paramdef>
-                                <paramdef>size_t* <parameter>sz</parameter></paramdef>
+                                <paramdef>sd_journal *<parameter>j</parameter></paramdef>
+                                <paramdef>size_t *<parameter>sz</parameter></paramdef>
                         </funcprototype>
                 </funcsynopsis>
         </refsynopsisdiv>
@@ -179,9 +179,9 @@
                 <para><function>sd_journal_get_data()</function>
                 returns 0 on success or a negative errno-style error
                 code. If the current entry does not include the
-                specified field -ENOENT is returned. If
+                specified field, -ENOENT is returned. If
                 <citerefentry><refentrytitle>sd_journal_next</refentrytitle><manvolnum>3</manvolnum></citerefentry>
-                has not been called at least once -EADDRNOTAVAIL is
+                has not been called at least once, -EADDRNOTAVAIL is
                 returned. <function>sd_journal_enumerate_data()</function>
                 returns a positive integer if the next field has been
                 read, 0 when no more fields are known, or a negative
@@ -203,10 +203,9 @@
                 <function>sd_journal_set_data_threshold()</function>
                 and
                 <function>sd_journal_get_data_threshold()</function>
-                interfaces are available as shared library, which can
+                interfaces are available as a shared library, which can
                 be compiled and linked to with the
-                <literal>libsystemd-journal</literal>
-                <citerefentry><refentrytitle>pkg-config</refentrytitle><manvolnum>1</manvolnum></citerefentry>
+                <constant>libsystemd</constant> <citerefentry><refentrytitle>pkg-config</refentrytitle><manvolnum>1</manvolnum></citerefentry>
                 file.</para>
         </refsect1>
 
@@ -226,7 +225,7 @@
                 <programlisting>...
 int print_fields(sd_journal *j) {
         const void *data;
-        size_t l;
+        size_t length;
         SD_JOURNAL_FOREACH_DATA(j, data, length)
                 printf("%.*s\n", (int) length, data);
 }

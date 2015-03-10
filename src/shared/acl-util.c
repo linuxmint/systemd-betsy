@@ -69,6 +69,34 @@ int acl_find_uid(acl_t acl, uid_t uid, acl_entry_t *entry) {
         return 0;
 }
 
+int calc_acl_mask_if_needed(acl_t *acl_p) {
+        acl_entry_t i;
+        int found;
+
+        assert(acl_p);
+
+        for (found = acl_get_entry(*acl_p, ACL_FIRST_ENTRY, &i);
+             found > 0;
+             found = acl_get_entry(*acl_p, ACL_NEXT_ENTRY, &i)) {
+
+                acl_tag_t tag;
+
+                if (acl_get_tag_type(i, &tag) < 0)
+                        return -errno;
+
+                if (tag == ACL_MASK)
+                        return 0;
+        }
+
+        if (found < 0)
+                return -errno;
+
+        if (acl_calc_mask(acl_p) < 0)
+                return -errno;
+
+        return 0;
+}
+
 int search_acl_groups(char*** dst, const char* path, bool* belong) {
         acl_t acl;
 
@@ -108,9 +136,8 @@ int search_acl_groups(char*** dst, const char* path, bool* belong) {
                                 return log_oom();
                         }
 
-                        r = strv_push(dst, name);
+                        r = strv_consume(dst, name);
                         if (r < 0) {
-                                free(name);
                                 acl_free(acl);
                                 return log_oom();
                         }

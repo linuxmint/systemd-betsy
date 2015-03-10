@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 
+#include "acpi-fpdt.h"
 #include "util.h"
 #include "utf8.h"
 #include "efivars.h"
@@ -36,7 +37,7 @@ bool is_efi_boot(void) {
 
 static int read_flag(const char *varname) {
         int r;
-        void *v;
+        _cleanup_free_ void *v = NULL;
         size_t s;
         uint8_t b;
 
@@ -44,15 +45,11 @@ static int read_flag(const char *varname) {
         if (r < 0)
                 return r;
 
-        if (s != 1) {
-                r = -EINVAL;
-                goto finish;
-        }
+        if (s != 1)
+                return -EINVAL;
 
         b = *(uint8_t *)v;
         r = b > 0;
-finish:
-        free(v);
         return r;
 }
 
@@ -133,7 +130,7 @@ int efi_get_variable(
 
 int efi_get_variable_string(sd_id128_t vendor, const char *name, char **p) {
         _cleanup_free_ void *s = NULL;
-        size_t ss;
+        size_t ss = 0;
         int r;
         char *x;
 
@@ -383,7 +380,7 @@ int efi_get_boot_options(uint16_t **options) {
                 list[count ++] = id;
         }
 
-        qsort(list, count, sizeof(uint16_t), cmp_uint16);
+        qsort_safe(list, count, sizeof(uint16_t), cmp_uint16);
 
         *options = list;
         return count;
@@ -396,7 +393,7 @@ fail:
 static int read_usec(sd_id128_t vendor, const char *name, usec_t *u) {
         _cleanup_free_ char *j = NULL;
         int r;
-        uint64_t x;
+        uint64_t x = 0;
 
         assert(name);
         assert(u);
@@ -413,7 +410,7 @@ static int read_usec(sd_id128_t vendor, const char *name, usec_t *u) {
         return 0;
 }
 
-static int get_boot_usec(usec_t *firmware, usec_t *loader) {
+int efi_loader_get_boot_usec(usec_t *firmware, usec_t *loader) {
         uint64_t x, y;
         int r;
 
@@ -440,48 +437,9 @@ static int get_boot_usec(usec_t *firmware, usec_t *loader) {
         return 0;
 }
 
-int efi_get_boot_timestamps(const dual_timestamp *n, dual_timestamp *firmware, dual_timestamp *loader) {
-        usec_t x, y, a;
-        int r;
-        dual_timestamp _n;
-
-        assert(firmware);
-        assert(loader);
-
-        if (!n) {
-                dual_timestamp_get(&_n);
-                n = &_n;
-        }
-
-        r = get_boot_usec(&x, &y);
-        if (r < 0)
-                return r;
-
-        /* Let's convert this to timestamps where the firmware
-         * began/loader began working. To make this more confusing:
-         * since usec_t is unsigned and the kernel's monotonic clock
-         * begins at kernel initialization we'll actually initialize
-         * the monotonic timestamps here as negative of the actual
-         * value. */
-
-        firmware->monotonic = y;
-        loader->monotonic = y - x;
-
-        a = n->monotonic + firmware->monotonic;
-        firmware->realtime = n->realtime > a ? n->realtime - a : 0;
-
-        a = n->monotonic + loader->monotonic;
-        loader->realtime = n->realtime > a ? n->realtime - a : 0;
-
-        return 0;
-}
-
-int efi_get_loader_device_part_uuid(sd_id128_t *u) {
+int efi_loader_get_device_part_uuid(sd_id128_t *u) {
         _cleanup_free_ char *p = NULL;
         int r, parsed[16];
-        unsigned i;
-
-        assert(u);
 
         r = efi_get_variable_string(EFI_VENDOR_LOADER, "LoaderDevicePartUUID", &p);
         if (r < 0)
@@ -494,8 +452,12 @@ int efi_get_loader_device_part_uuid(sd_id128_t *u) {
                    &parsed[12], &parsed[13], &parsed[14], &parsed[15]) != 16)
                 return -EIO;
 
-        for (i = 0; i < ELEMENTSOF(parsed); i++)
-                u->bytes[i] = parsed[i];
+        if (u) {
+                unsigned i;
+
+                for (i = 0; i < ELEMENTSOF(parsed); i++)
+                        u->bytes[i] = parsed[i];
+        }
 
         return 0;
 }

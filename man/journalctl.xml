@@ -21,7 +21,8 @@
   along with systemd; If not, see <http://www.gnu.org/licenses/>.
 -->
 
-<refentry id="journalctl">
+<refentry id="journalctl"
+          xmlns:xi="http://www.w3.org/2001/XInclude">
 
         <refentryinfo>
                 <title>journalctl</title>
@@ -64,11 +65,11 @@
                 journal as written by
                 <citerefentry><refentrytitle>systemd-journald.service</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
 
-                <para>If called without parameter it will show the full
+                <para>If called without parameters, it will show the full
                 contents of the journal, starting with the oldest
                 entry collected.</para>
 
-                <para>If one or more match arguments are passed the
+                <para>If one or more match arguments are passed, the
                 output is filtered accordingly. A match is in the
                 format <literal>FIELD=VALUE</literal>,
                 e.g. <literal>_SYSTEMD_UNIT=httpd.service</literal>,
@@ -76,7 +77,7 @@
                 entry. See
                 <citerefentry><refentrytitle>systemd.journal-fields</refentrytitle><manvolnum>7</manvolnum></citerefentry>
                 for a list of well-known fields. If multiple matches
-                are specified matching different fields the log
+                are specified matching different fields, the log
                 entries are filtered by both, i.e. the resulting output
                 will show only entries matching all the specified
                 matches of this kind. If two matches apply to the same
@@ -84,29 +85,43 @@
                 alternatives, i.e. the resulting output will show
                 entries matching any of the specified matches for the
                 same field. Finally, if the character
-                "<literal>+</literal>" appears as separate word on the
-                command line all matches before and after are combined
+                <literal>+</literal> appears as a separate word on the
+                command line, all matches before and after are combined
                 in a disjunction (i.e. logical OR).</para>
 
                 <para>As shortcuts for a few types of field/value
-                matches file paths may be specified. If a file path
+                matches, file paths may be specified. If a file path
                 refers to an executable file, this is equivalent to an
                 <literal>_EXE=</literal> match for the canonicalized
-                binary path. Similar, if a path refers to a device
+                binary path. Similarly, if a path refers to a device
                 node, this is equivalent to a
                 <literal>_KERNEL_DEVICE=</literal> match for the
                 device.</para>
 
                 <para>Output is interleaved from all accessible
                 journal files, whether they are rotated or currently
-                being written, and regardless whether they belong to the
+                being written, and regardless of whether they belong to the
                 system itself or are accessible user journals.</para>
 
                 <para>All users are granted access to their private
-                per-user journals. However, by default only root and
-                users who are members of the <literal>adm</literal>
+                per-user journals. However, by default, only root and
+                users who are members of the <literal>systemd-journal</literal>
                 group get access to the system journal and the
                 journals of other users.</para>
+
+                <para>The output is paged through
+                <command>less</command> by default, and long lines are
+                "truncated" to screen width. The hidden part can be
+                viewed by using the left-arrow and right-arrow
+                keys. Paging can be disabled; see the
+                <option>--no-pager</option> option and the "Environment"
+                section below.</para>
+
+                <para>When outputing to a tty, lines are colored
+                according to priority: lines of level ERROR and higher
+                are colored red; lines of level NOTICE and higher are
+                highlighted; other lines are displayed normally.
+                </para>
         </refsect1>
 
         <refsect1>
@@ -116,32 +131,20 @@
 
                 <variablelist>
                         <varlistentry>
-                                <term><option>-h</option></term>
-                                <term><option>--help</option></term>
-
-                                <listitem><para>Prints a short help
-                                text and exits.</para></listitem>
-                        </varlistentry>
-
-                        <varlistentry>
-                                <term><option>--version</option></term>
-
-                                <listitem><para>Prints a short version
-                                string and exits.</para></listitem>
-                        </varlistentry>
-
-                        <varlistentry>
-                                <term><option>--no-pager</option></term>
-
-                                <listitem><para>Do not pipe output into a
-                                pager.</para></listitem>
-                        </varlistentry>
-
-                        <varlistentry>
+                                <term><option>--no-full</option></term>
                                 <term><option>--full</option></term>
+                                <term><option>-l</option></term>
 
-                                <listitem><para>Show all (printable) fields in
-                                full.</para></listitem>
+                                <listitem><para>Ellipsize fields when
+                                they do not fit in available columns.
+                                The default is to show full fields,
+                                allowing them to wrap or be truncated
+                                by the pager, if one is used.</para>
+
+                                <para>The old options
+                                <option>-l</option>/<option>--full</option>
+                                are not useful anymore, except to undo
+                                <option>--no-full</option>.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -172,7 +175,7 @@
                                 the end of the journal inside the
                                 implied pager tool. This implies
                                 <option>-n1000</option> to guarantee
-                                that the pager won't buffer logs of
+                                that the pager will not buffer logs of
                                 unbounded size. This may be overridden
                                 with an explicit <option>-n</option>
                                 with some other numeric value on the
@@ -208,7 +211,7 @@
                                 <term><option>-r</option></term>
                                 <term><option>--reverse</option></term>
 
-                                <listitem><para>Reverse output, so the newest
+                                <listitem><para>Reverse output so that the newest
                                 entries are displayed first.</para></listitem>
                         </varlistentry>
 
@@ -218,53 +221,150 @@
 
                                 <listitem><para>Controls the
                                 formatting of the journal entries that
-                                are shown. Takes one of
-                                <literal>short</literal>,
-                                <literal>short-monotonic</literal>,
-                                <literal>verbose</literal>,
-                                <literal>export</literal>,
-                                <literal>json</literal>,
-                                <literal>json-pretty</literal>,
-                                <literal>json-sse</literal>,
-                                <literal>cat</literal>. <literal>short</literal>
-                                is the default and generates an output
-                                that is mostly identical to the
-                                formatting of classic syslog log
-                                files, showing one line per journal
-                                entry. <literal>short-monotonic</literal>
-                                is very similar but shows monotonic
-                                timestamps instead of wallclock
-                                timestamps. <literal>verbose</literal>
-                                shows the full structured entry items
-                                with all
-                                fields. <literal>export</literal>
-                                serializes the journal into a binary
-                                (but mostly text-based) stream
-                                suitable for backups and network
-                                transfer (see <ulink
-                                url="http://www.freedesktop.org/wiki/Software/systemd/export">Journal
-                                Export Format</ulink> for more
-                                information). <literal>json</literal>
-                                formats entries as JSON data
-                                structures, one per
-                                line (see <ulink
-                                url="http://www.freedesktop.org/wiki/Software/systemd/json">Journal
-                                JSON Format</ulink> for more
-                                information). <literal>json-pretty</literal>
-                                also formats entries as JSON data
-                                structures, but formats them in
-                                multiple lines in order to make them
-                                more readable for
-                                humans. <literal>json-sse</literal>
-                                also formats entries as JSON data
-                                structures, but wraps them in a format
-                                suitable for <ulink
-                                url="https://developer.mozilla.org/en-US/docs/Server-sent_events/Using_server-sent_events">Server-Sent
-                                Events</ulink>. <literal>cat</literal>
-                                generates a very terse output only
-                                showing the actual message of each
-                                journal entry with no meta data, not
-                                even a timestamp.</para></listitem>
+                                are shown. Takes one of the following options:
+                                </para>
+                                <variablelist>
+                                        <varlistentry>
+                                                <term>
+                                                        <option>short</option>
+                                                </term>
+                                                <listitem>
+                                                        <para>is the default
+                                                        and generates an output
+                                                        that is mostly identical
+                                                        to the formatting of
+                                                        classic syslog files,
+                                                        showing one line per
+                                                        journal entry.</para>
+                                                </listitem>
+                                        </varlistentry>
+
+                                        <varlistentry>
+                                                <term>
+                                                        <option>short-iso</option>
+                                                </term>
+                                                <listitem>
+                                                        <para>is very similar,
+                                                        but shows ISO 8601
+                                                        wallclock timestamps.
+                                                        </para>
+                                                </listitem>
+                                        </varlistentry>
+
+                                        <varlistentry>
+                                                <term>
+                                                        <option>short-precise</option>
+                                                </term>
+                                                <listitem>
+                                                        <para>is very similar,
+                                                        but shows timestamps
+                                                        with full microsecond
+                                                        precision.
+                                                        </para>
+                                                </listitem>
+                                        </varlistentry>
+
+                                        <varlistentry>
+                                                <term>
+                                                        <option>short-monotonic</option>
+                                                </term>
+                                                <listitem>
+                                                        <para>is very similar,
+                                                        but shows monotonic
+                                                        timestamps instead of
+                                                        wallclock timestamps.
+                                                        </para>
+                                                </listitem>
+                                        </varlistentry>
+
+                                        <varlistentry>
+                                                <term>
+                                                        <option>verbose</option>
+                                                </term>
+                                                <listitem>
+                                                        <para>shows the
+                                                        full-structured entry
+                                                        items with all fields.
+                                                        </para>
+                                                </listitem>
+                                        </varlistentry>
+
+                                        <varlistentry>
+                                                <term>
+                                                        <option>export</option>
+                                                </term>
+                                                <listitem>
+                                                        <para>serializes the
+                                                        journal into a binary
+                                                        (but mostly text-based)
+                                                        stream suitable for
+                                                        backups and network
+                                                        transfer (see <ulink
+                                                        url="http://www.freedesktop.org/wiki/Software/systemd/export">Journal
+                                                        Export Format</ulink>
+                                                        for more
+                                                        information).</para>
+                                                </listitem>
+                                        </varlistentry>
+
+                                        <varlistentry>
+                                                <term>
+                                                        <option>json</option>
+                                                </term>
+                                                <listitem>
+                                                        <para>formats entries
+                                                        as JSON data structures,
+                                                        one per line (see <ulink
+                                                        url="http://www.freedesktop.org/wiki/Software/systemd/json">Journal
+                                                        JSON Format</ulink> for
+                                                        more information).</para>
+                                                </listitem>
+                                        </varlistentry>
+
+                                        <varlistentry>
+                                                <term>
+                                                        <option>json-pretty</option>
+                                                </term>
+                                                <listitem>
+                                                        <para>formats entries as
+                                                        JSON data structures,
+                                                        but formats them in
+                                                        multiple lines in order
+                                                        to make them more
+                                                        readable by humans.</para>
+                                                </listitem>
+                                        </varlistentry>
+
+                                        <varlistentry>
+                                                <term>
+                                                        <option>json-sse</option>
+                                                </term>
+                                                <listitem>
+                                                        <para>formats entries as
+                                                        JSON data structures,
+                                                        but wraps them in a
+                                                        format suitable for <ulink
+                                                        url="https://developer.mozilla.org/en-US/docs/Server-sent_events/Using_server-sent_events">Server-Sent
+                                                        Events</ulink>.</para>
+                                                </listitem>
+                                        </varlistentry>
+
+                                        <varlistentry>
+                                                <term>
+                                                        <option>cat</option>
+                                                </term>
+                                                <listitem>
+                                                        <para>generates a very
+                                                        terse output, only
+                                                        showing the actual
+                                                        message of each journal
+                                                        entry with no metadata,
+                                                        not even a timestamp.
+                                                        </para>
+                                                </listitem>
+                                        </varlistentry>
+                                </variablelist>
+                                </listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -280,15 +380,22 @@
                                 context of an error or log event,
                                 possible solutions, as well as
                                 pointers to support forums, developer
-                                documentation and any other relevant
+                                documentation, and any other relevant
                                 manuals. Note that help texts are not
                                 available for all messages, but only
                                 for selected ones. For more
-                                information on the message catalog
+                                information on the message catalog,
                                 please refer to the <ulink
                                 url="http://www.freedesktop.org/wiki/Software/systemd/catalog">Message
                                 Catalog Developer
-                                Documentation</ulink>.</para></listitem>
+                                Documentation</ulink>.</para>
+
+                                <para>Note: when attaching
+                                <command>journalctl</command> output
+                                to bug reports, please do
+                                <emphasis>not</emphasis> use
+                                <option>-x</option>.</para>
+                                </listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -296,8 +403,8 @@
                                 <term><option>--quiet</option></term>
 
                                 <listitem><para>Suppresses any warning
-                                message regarding inaccessible system
-                                journals when run as normal
+                                messages regarding inaccessible system
+                                journals when run as a normal
                                 user.</para></listitem>
                         </varlistentry>
 
@@ -312,29 +419,96 @@
                         </varlistentry>
 
                         <varlistentry>
-                                <term><option>-b</option></term>
-                                <term><option>--this-boot</option></term>
+                                <term><option>-b <optional><replaceable>ID</replaceable></optional><optional><replaceable>±offset</replaceable></optional></option></term>
+                                <term><option>--boot=<optional><replaceable>ID</replaceable></optional><optional><replaceable>±offset</replaceable></optional></option></term>
 
-                                <listitem><para>Show data only from
-                                current boot. This will add a match
-                                for <literal>_BOOT_ID=</literal> for
-                                the current boot ID of the
-                                kernel.</para></listitem>
+                                <listitem><para>Show messages from a specific
+                                boot. This will add a match for
+                                <literal>_BOOT_ID=</literal>.</para>
+
+                                <para>The argument may be empty, in which case
+                                logs for the current boot will be shown.</para>
+
+                                <para>If the boot ID is omitted, a positive
+                                <replaceable>offset</replaceable> will look up
+                                the boots starting from the beginning of the
+                                journal, and a equal-or-less-than zero
+                                <replaceable>offset</replaceable> will look up
+                                boots starting from the end of the
+                                journal. Thus, <constant>1</constant> means the
+                                first boot found in the journal in
+                                chronological order, <constant>2</constant> the
+                                second and so on; while <constant>-0</constant>
+                                is the last boot, <constant>-1</constant> the
+                                boot before last, and so on. An empty
+                                <replaceable>offset</replaceable> is equivalent
+                                to specifying <constant>-0</constant>, except
+                                when the current boot is not the last boot
+                                (e.g. because <option>--directory</option> was
+                                specified to look at logs from a different
+                                machine).</para>
+
+                                <para>If the 32-character
+                                <replaceable>ID</replaceable> is specified, it
+                                may optionally be followed by
+                                <replaceable>offset</replaceable> which
+                                identifies the boot relative to the one given by
+                                boot <replaceable>ID</replaceable>. Negative
+                                values mean earlier boots and a positive values
+                                mean later boots. If
+                                <replaceable>offset</replaceable> is not
+                                specified, a value of zero is assumed, and the
+                                logs for the boot given by
+                                <replaceable>ID</replaceable> are shown.
+                                </para>
+
+                                </listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><option>--list-boots</option></term>
+
+                                <listitem><para>Show a tabular list of
+                                boot numbers (relative to the current
+                                boot), their IDs, and the timestamps
+                                of the first and last message
+                                pertaining to the boot.
+                                </para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><option>-k</option></term>
+                                <term><option>--dmesg</option></term>
+
+                                <listitem><para>Show only kernel messages. This
+                                implies <option>-b</option> and adds the match
+                                <literal>_TRANSPORT=kernel</literal>.
+                                </para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><option>-u</option></term>
-                                <term><option>--unit=</option></term>
+                                <term><option>--unit=<replaceable>UNIT</replaceable>|<replaceable>PATTERN</replaceable></option></term>
 
                                 <listitem><para>Show messages for the
-                                specified systemd unit. This will add
-                                a match for messages from the unit
-                                (<literal>_SYSTEMD_UNIT=</literal>)
-                                and additional matches for messages
-                                from systemd and messages about
-                                coredumps for the specified unit.</para>
-                                <para>This parameter can be specified multiple times.
-                                </para></listitem>
+                                specified systemd unit
+                                <replaceable>UNIT</replaceable>, or
+                                for any of the units matched by
+                                <replaceable>PATTERN</replaceable>.
+                                If a pattern is specified, a list of
+                                unit names found in the journal is
+                                compared with the specified pattern
+                                and all that match are used. For each
+                                unit name, a match is added for
+                                messages from the unit
+                                (<literal>_SYSTEMD_UNIT=<replaceable>UNIT</replaceable></literal>),
+                                along with additional matches for
+                                messages from systemd and messages
+                                about coredumps for the specified
+                                unit.</para>
+
+                                <para>This parameter can be specified
+                                multiple times.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -375,10 +549,10 @@
                                 <literal>notice</literal> (5),
                                 <literal>info</literal> (6),
                                 <literal>debug</literal> (7). If a
-                                single log level is specified all
+                                single log level is specified, all
                                 messages with this log level or a
                                 lower (hence more important) log level
-                                are shown. If a range is specified all
+                                are shown. If a range is specified, all
                                 messages within the range are shown,
                                 including both the start and the end
                                 value of the range. This will add
@@ -398,20 +572,43 @@
                         </varlistentry>
 
                         <varlistentry>
+                                <term><option>--after-cursor=</option></term>
+
+                                <listitem><para>Start showing entries
+                                from the location in the journal
+                                <emphasis>after</emphasis> the
+                                location specified by the this cursor.
+                                The cursor is shown when the
+                                <option>--show-cursor</option> option
+                                is used.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><option>--show-cursor</option></term>
+
+                                <listitem><para>The cursor is shown after the last
+                                entry after two dashes:</para>
+                                <programlisting>-- cursor: s=0639...</programlisting>
+                                <para>The format of the cursor is private
+                                and subject to change.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
                                 <term><option>--since=</option></term>
                                 <term><option>--until=</option></term>
 
                                 <listitem><para>Start showing entries
                                 on or newer than the specified date,
                                 or on or older than the specified
-                                date, respectively. Date specifications should be of
-                                the format "2012-10-30 18:17:16". If
-                                the time part is omitted, 00:00:00 is
-                                assumed. If only the seconds component
-                                is omitted, :00 is assumed. If the
-                                date component is omitted, the
-                                current day is assumed. Alternatively
-                                the strings
+                                date, respectively. Date specifications
+                                should be of the format
+                                <literal>2012-10-30 18:17:16</literal>.
+                                If the time part is omitted,
+                                <literal>00:00:00</literal> is assumed.
+                                If only the seconds component is omitted,
+                                <literal>:00</literal> is assumed. If the
+                                date component is omitted, the current
+                                day is assumed. Alternatively the strings
                                 <literal>yesterday</literal>,
                                 <literal>today</literal>,
                                 <literal>tomorrow</literal> are
@@ -438,22 +635,60 @@
                         </varlistentry>
 
                         <varlistentry>
-                                <term><option>-D</option></term>
-                                <term><option>--directory=</option></term>
+                                <term><option>--system</option></term>
+                                <term><option>--user</option></term>
 
-                                <listitem><para>Takes a
-                                directory path as argument. If
-                                specified journalctl will operate on the
-                                specified journal directory instead of
-                                the default runtime and system journal
-                                paths.</para></listitem>
+                                <listitem><para>Show messages from
+                                system services and the kernel (with
+                                <option>--system</option>). Show
+                                messages from service of current user
+                                (with <option>--user</option>).
+                                If neither is specified, show all
+                                messages that the user can see.
+                                </para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><option>-M</option></term>
+                                <term><option>--machine=</option></term>
+
+                                <listitem><para>Show messages from a
+                                running, local container. Specify a
+                                container name to connect
+                                to.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><option>-D <replaceable>DIR</replaceable></option></term>
+                                <term><option>--directory=<replaceable>DIR</replaceable></option></term>
+
+                                <listitem><para>Takes a directory path
+                                as argument. If specified, journalctl
+                                will operate on the specified journal
+                                directory
+                                <replaceable>DIR</replaceable> instead
+                                of the default runtime and system
+                                journal paths.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><option>--file=<replaceable>GLOB</replaceable></option></term>
+
+                                <listitem><para>Takes a file glob as an
+                                argument. If specified, journalctl will
+                                operate on the specified journal files
+                                matching <replaceable>GLOB</replaceable>
+                                instead of the default runtime and
+                                system journal paths. May be specified
+                                multiple times, in which case files will
+                                be suitably interleaved.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><option>--root=<replaceable>ROOT</replaceable></option></term>
 
                                 <listitem><para>Takes a directory path
-                                as argument. If specified journalctl
+                                as an argument. If specified, journalctl
                                 will operate on catalog file hierarchy
                                 underneath the specified directory
                                 instead of the root directory
@@ -467,13 +702,13 @@
                                 <term><option>--new-id128</option></term>
 
                                 <listitem><para>Instead of showing
-                                journal contents generate a new 128
-                                bit ID suitable for identifying
+                                journal contents, generate a new 128-bit
+                                ID suitable for identifying
                                 messages. This is intended for usage
                                 by developers who need a new
                                 identifier for a new message they
                                 introduce and want to make
-                                recognizable. Will print the new ID in
+                                recognizable. This will print the new ID in
                                 three different formats which can be
                                 copied into source code or
                                 similar.</para></listitem>
@@ -483,7 +718,7 @@
                                 <term><option>--header</option></term>
 
                                 <listitem><para>Instead of showing
-                                journal contents show internal header
+                                journal contents, show internal header
                                 information of the journal fields
                                 accessed.</para></listitem>
                         </varlistentry>
@@ -498,16 +733,16 @@
 
                         <varlistentry>
                                 <term><option>--list-catalog
-                                <optional><replaceable>ID128...</replaceable></optional>
+                                <optional><replaceable>128-bit-ID...</replaceable></optional>
                                 </option></term>
 
                                 <listitem><para>List the contents of
-                                the message catalog, as table of
-                                message IDs plus their short
+                                the message catalog as a table of
+                                message IDs, plus their short
                                 description strings.</para>
 
                                 <para>If any
-                                <replaceable>ID128</replaceable>s are
+                                <replaceable>128-bit-ID</replaceable>s are
                                 specified, only those entries are shown.
                                 </para>
                                 </listitem>
@@ -515,18 +750,18 @@
 
                         <varlistentry>
                                 <term><option>--dump-catalog
-                                <optional><replaceable>ID128...</replaceable></optional>
+                                <optional><replaceable>128-bit-ID...</replaceable></optional>
                                 </option></term>
 
                                 <listitem><para>Show the contents of
                                 the message catalog, with entries
                                 separated by a line consisting of two
-                                dashes and the id (the format is the
+                                dashes and the ID (the format is the
                                 same as <filename>.catalog</filename>
-                                files.</para>
+                                files).</para>
 
                                 <para>If any
-                                <replaceable>ID128</replaceable>s are
+                                <replaceable>128-bit-ID</replaceable>s are
                                 specified, only those entries are shown.
                                 </para>
                                 </listitem>
@@ -538,7 +773,7 @@
                                 <listitem><para>Update the message
                                 catalog index. This command needs to
                                 be executed each time new catalog
-                                files are installed, removed or
+                                files are installed, removed, or
                                 updated to rebuild the binary catalog
                                 index.</para></listitem>
                         </varlistentry>
@@ -547,21 +782,37 @@
                                 <term><option>--setup-keys</option></term>
 
                                 <listitem><para>Instead of showing
-                                journal contents generate a new key
+                                journal contents, generate a new key
                                 pair for Forward Secure Sealing
                                 (FSS). This will generate a sealing
                                 key and a verification key. The
                                 sealing key is stored in the journal
                                 data directory and shall remain on the
                                 host. The verification key should be
-                                stored externally.</para></listitem>
+                                stored externally. Refer to the
+                                <option>Seal=</option> option in
+                                <citerefentry><refentrytitle>journald.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>
+                                for information on Forward Secure
+                                Sealing and for a link to a refereed
+                                scholarly paper detailing the
+                                cryptographic theory it is based on.
+                                </para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><option>--force</option></term>
+
+                                <listitem><para>When
+                                <option>--setup-keys</option> is passed and
+                                Forward Secure Sealing (FSS) has already been
+                                configured, recreate FSS keys.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><option>--interval=</option></term>
 
                                 <listitem><para>Specifies the change
-                                interval for the sealing key, when
+                                interval for the sealing key when
                                 generating an FSS key pair with
                                 <option>--setup-keys</option>. Shorter
                                 intervals increase CPU consumption but
@@ -577,9 +828,9 @@
                                 <listitem><para>Check the journal file
                                 for internal consistency. If the
                                 file has been generated with FSS
-                                enabled, and the FSS verification key
+                                enabled and the FSS verification key
                                 has been specified with
-                                <option>--verify-key=</option>
+                                <option>--verify-key=</option>,
                                 authenticity of the journal file is
                                 verified.</para></listitem>
                         </varlistentry>
@@ -593,53 +844,42 @@
                                 operation.</para></listitem>
                         </varlistentry>
 
+                        <xi:include href="standard-options.xml" xpointer="help" />
+                        <xi:include href="standard-options.xml" xpointer="version" />
+                        <xi:include href="standard-options.xml" xpointer="no-pager" />
                 </variablelist>
         </refsect1>
 
         <refsect1>
                 <title>Exit status</title>
 
-                <para>On success 0 is returned, a non-zero failure
-                code otherwise.</para>
+                <para>On success, 0 is returned; otherwise, a non-zero
+                failure code is returned.</para>
         </refsect1>
 
-        <refsect1>
-                <title>Environment</title>
-
-                <variablelist class='environment-variables'>
-                        <varlistentry>
-                                <term><varname>$SYSTEMD_PAGER</varname></term>
-                                <listitem><para>Pager to use when
-                                <option>--no-pager</option> is not given;
-                                overrides <varname>$PAGER</varname>.  Setting
-                                this to an empty string or the value
-                                <literal>cat</literal> is equivalent to passing
-                                <option>--no-pager</option>.</para></listitem>
-                        </varlistentry>
-                </variablelist>
-        </refsect1>
+        <xi:include href="less-variables.xml" />
 
         <refsect1>
                 <title>Examples</title>
 
-                <para>Without arguments all collected logs are shown
+                <para>Without arguments, all collected logs are shown
                 unfiltered:</para>
 
                 <programlisting>journalctl</programlisting>
 
-                <para>With one match specified all entries with a field matching the expression are shown:</para>
+                <para>With one match specified, all entries with a field matching the expression are shown:</para>
 
                 <programlisting>journalctl _SYSTEMD_UNIT=avahi-daemon.service</programlisting>
 
-                <para>If two different fields are matched only entries matching both expressions at the same time are shown:</para>
+                <para>If two different fields are matched, only entries matching both expressions at the same time are shown:</para>
 
                 <programlisting>journalctl _SYSTEMD_UNIT=avahi-daemon.service _PID=28097</programlisting>
 
-                <para>If two matches refer to the same field all entries matching either expression are shown:</para>
+                <para>If two matches refer to the same field, all entries matching either expression are shown:</para>
 
                 <programlisting>journalctl _SYSTEMD_UNIT=avahi-daemon.service _SYSTEMD_UNIT=dbus.service</programlisting>
 
-                <para>If the separator "<literal>+</literal>" is used
+                <para>If the separator <literal>+</literal> is used,
                 two expressions may be combined in a logical OR. The
                 following will show all messages from the Avahi
                 service process with the PID 28097 plus all messages
@@ -656,6 +896,10 @@
 
                 <programlisting>journalctl /dev/sda</programlisting>
 
+                <para>Show all kernel logs from previous boot:</para>
+
+                <programlisting>journalctl -k -b -1</programlisting>
+
         </refsect1>
 
         <refsect1>
@@ -664,6 +908,7 @@
                         <citerefentry><refentrytitle>systemd</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>systemd-journald.service</refentrytitle><manvolnum>8</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
+                        <citerefentry><refentrytitle>coredumpctl</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>systemd.journal-fields</refentrytitle><manvolnum>7</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>journald.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>
                 </para>

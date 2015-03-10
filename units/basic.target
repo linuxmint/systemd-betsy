@@ -9,6 +9,5 @@
 Description=Basic System
 Documentation=man:systemd.special(7)
 Requires=sysinit.target
-Wants=sockets.target timers.target paths.target
-After=sysinit.target sockets.target timers.target paths.target
-RefuseManualStart=yes
+Wants=sockets.target timers.target paths.target slices.target
+After=sysinit.target sockets.target timers.target paths.target slices.target

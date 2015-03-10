@@ -25,18 +25,19 @@
 #include "macro.h"
 
 int main(int argc, char *argv[]) {
-        Manager *m;
+        Manager *m = NULL;
         Unit *idle_ok, *idle_bad, *rr_ok, *rr_bad, *rr_sched;
         Service *ser;
         FILE *serial = NULL;
         FDSet *fdset = NULL;
         int r;
+        const char *dir = TEST_DIR;
 
         /* prepare the test */
-        assert_se(set_unit_path(TEST_DIR) >= 0);
+        assert_se(set_unit_path(dir) >= 0);
         r = manager_new(SYSTEMD_USER, &m);
-        if (r == -EPERM) {
-                puts("manager_new: Permission denied. Skipping test.");
+        if (IN_SET(r, -EPERM, -EACCES, -EADDRINUSE, -EHOSTDOWN, -ENOENT)) {
+                printf("Skipping test: manager_new: %s", strerror(-r));
                 return EXIT_TEST_SKIP;
         }
         assert(r >= 0);
@@ -87,6 +88,8 @@ int main(int argc, char *argv[]) {
         ser = SERVICE(rr_sched);
         assert_se(ser->exec_context.cpu_sched_policy == SCHED_RR);
         assert_se(ser->exec_context.cpu_sched_priority == 99);
+
+        manager_free(m);
 
         return EXIT_SUCCESS;
 }

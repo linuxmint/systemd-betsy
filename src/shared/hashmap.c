@@ -27,8 +27,9 @@
 #include "util.h"
 #include "hashmap.h"
 #include "macro.h"
+#include "siphash24.h"
 
-#define NBUCKETS 127
+#define INITIAL_N_BUCKETS 31
 
 struct hashmap_entry {
         const void *key;
@@ -42,12 +43,13 @@ struct Hashmap {
         compare_func_t compare_func;
 
         struct hashmap_entry *iterate_list_head, *iterate_list_tail;
-        unsigned n_entries;
 
-        bool from_pool;
+        struct hashmap_entry ** buckets;
+        unsigned n_buckets, n_entries;
+
+        uint8_t hash_key[HASH_KEY_SIZE];
+        bool from_pool:1;
 };
-
-#define BY_HASH(h) ((struct hashmap_entry**) ((uint8_t*) (h) + ALIGN(sizeof(Hashmap))))
 
 struct pool {
         struct pool *next;
@@ -61,8 +63,14 @@ static void *first_hashmap_tile = NULL;
 static struct pool *first_entry_pool = NULL;
 static void *first_entry_tile = NULL;
 
-static void* allocate_tile(struct pool **first_pool, void **first_tile, size_t tile_size) {
+static void* allocate_tile(struct pool **first_pool, void **first_tile, size_t tile_size, unsigned at_least) {
         unsigned i;
+
+        /* When a tile is released we add it to the list and simply
+         * place the next pointer at its offset 0. */
+
+        assert(tile_size >= sizeof(void*));
+        assert(at_least > 0);
 
         if (*first_tile) {
                 void *r;
@@ -78,7 +86,7 @@ static void* allocate_tile(struct pool **first_pool, void **first_tile, size_t t
                 struct pool *p;
 
                 n = *first_pool ? (*first_pool)->n_tiles : 0;
-                n = MAX(512U, n * 2);
+                n = MAX(at_least, n * 2);
                 size = PAGE_ALIGN(ALIGN(sizeof(struct pool)) + n*tile_size);
                 n = (size - ALIGN(sizeof(struct pool))) / tile_size;
 
@@ -123,47 +131,60 @@ __attribute__((destructor)) static void cleanup_pool(void) {
 
 #endif
 
-unsigned string_hash_func(const void *p) {
-        unsigned hash = 5381;
-        const signed char *c;
-
-        /* DJB's hash function */
-
-        for (c = p; *c; c++)
-                hash = (hash << 5) + hash + (unsigned) *c;
-
-        return hash;
+unsigned long string_hash_func(const void *p, const uint8_t hash_key[HASH_KEY_SIZE]) {
+        uint64_t u;
+        siphash24((uint8_t*) &u, p, strlen(p), hash_key);
+        return (unsigned long) u;
 }
 
 int string_compare_func(const void *a, const void *b) {
         return strcmp(a, b);
 }
 
-unsigned trivial_hash_func(const void *p) {
-        return PTR_TO_UINT(p);
+unsigned long trivial_hash_func(const void *p, const uint8_t hash_key[HASH_KEY_SIZE]) {
+        uint64_t u;
+        siphash24((uint8_t*) &u, &p, sizeof(p), hash_key);
+        return (unsigned long) u;
 }
 
 int trivial_compare_func(const void *a, const void *b) {
         return a < b ? -1 : (a > b ? 1 : 0);
 }
 
-unsigned uint64_hash_func(const void *p) {
+unsigned long uint64_hash_func(const void *p, const uint8_t hash_key[HASH_KEY_SIZE]) {
         uint64_t u;
-
-        assert_cc(sizeof(uint64_t) == 2*sizeof(unsigned));
-
-        u = *(const uint64_t*) p;
-
-        return (unsigned) ((u >> 32) ^ u);
+        siphash24((uint8_t*) &u, p, sizeof(uint64_t), hash_key);
+        return (unsigned long) u;
 }
 
 int uint64_compare_func(const void *_a, const void *_b) {
         uint64_t a, b;
-
         a = *(const uint64_t*) _a;
         b = *(const uint64_t*) _b;
-
         return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+static unsigned bucket_hash(Hashmap *h, const void *p) {
+        return (unsigned) (h->hash_func(p, h->hash_key) % h->n_buckets);
+}
+
+static void get_hash_key(uint8_t hash_key[HASH_KEY_SIZE], bool reuse_is_ok) {
+        static uint8_t current[HASH_KEY_SIZE];
+        static bool current_initialized = false;
+
+        /* Returns a hash function key to use. In order to keep things
+         * fast we will not generate a new key each time we allocate a
+         * new hash table. Instead, we'll just reuse the most recently
+         * generated one, except if we never generated one or when we
+         * are rehashing an entire hash table because we reached a
+         * fill level */
+
+        if (!current_initialized || !reuse_is_ok) {
+                random_bytes(current, sizeof(current));
+                current_initialized = true;
+        }
+
+        memcpy(hash_key, current, sizeof(current));
 }
 
 Hashmap *hashmap_new(hash_func_t hash_func, compare_func_t compare_func) {
@@ -173,14 +194,14 @@ Hashmap *hashmap_new(hash_func_t hash_func, compare_func_t compare_func) {
 
         b = is_main_thread();
 
-        size = ALIGN(sizeof(Hashmap)) + NBUCKETS * sizeof(struct hashmap_entry*);
+        size = ALIGN(sizeof(Hashmap)) + INITIAL_N_BUCKETS * sizeof(struct hashmap_entry*);
 
         if (b) {
-                h = allocate_tile(&first_hashmap_pool, &first_hashmap_tile, size);
+                h = allocate_tile(&first_hashmap_pool, &first_hashmap_tile, size, 8);
                 if (!h)
                         return NULL;
 
-                memset(h, 0, size);
+                memzero(h, size);
         } else {
                 h = malloc0(size);
 
@@ -191,23 +212,32 @@ Hashmap *hashmap_new(hash_func_t hash_func, compare_func_t compare_func) {
         h->hash_func = hash_func ? hash_func : trivial_hash_func;
         h->compare_func = compare_func ? compare_func : trivial_compare_func;
 
+        h->n_buckets = INITIAL_N_BUCKETS;
         h->n_entries = 0;
         h->iterate_list_head = h->iterate_list_tail = NULL;
 
+        h->buckets = (struct hashmap_entry**) ((uint8_t*) h + ALIGN(sizeof(Hashmap)));
+
         h->from_pool = b;
+
+        get_hash_key(h->hash_key, true);
 
         return h;
 }
 
 int hashmap_ensure_allocated(Hashmap **h, hash_func_t hash_func, compare_func_t compare_func) {
+        Hashmap *q;
+
         assert(h);
 
         if (*h)
                 return 0;
 
-        if (!(*h = hashmap_new(hash_func, compare_func)))
+        q = hashmap_new(hash_func, compare_func);
+        if (!q)
                 return -ENOMEM;
 
+        *h = q;
         return 0;
 }
 
@@ -216,11 +246,11 @@ static void link_entry(Hashmap *h, struct hashmap_entry *e, unsigned hash) {
         assert(e);
 
         /* Insert into hash table */
-        e->bucket_next = BY_HASH(h)[hash];
+        e->bucket_next = h->buckets[hash];
         e->bucket_previous = NULL;
-        if (BY_HASH(h)[hash])
-                BY_HASH(h)[hash]->bucket_previous = e;
-        BY_HASH(h)[hash] = e;
+        if (h->buckets[hash])
+                h->buckets[hash]->bucket_previous = e;
+        h->buckets[hash] = e;
 
         /* Insert into iteration list */
         e->iterate_previous = h->iterate_list_tail;
@@ -260,7 +290,7 @@ static void unlink_entry(Hashmap *h, struct hashmap_entry *e, unsigned hash) {
         if (e->bucket_previous)
                 e->bucket_previous->bucket_next = e->bucket_next;
         else
-                BY_HASH(h)[hash] = e->bucket_next;
+                h->buckets[hash] = e->bucket_next;
 
         assert(h->n_entries >= 1);
         h->n_entries--;
@@ -272,8 +302,7 @@ static void remove_entry(Hashmap *h, struct hashmap_entry *e) {
         assert(h);
         assert(e);
 
-        hash = h->hash_func(e->key) % NBUCKETS;
-
+        hash = bucket_hash(h, e->key);
         unlink_entry(h, e, hash);
 
         if (h->from_pool)
@@ -290,6 +319,9 @@ void hashmap_free(Hashmap*h) {
                 return;
 
         hashmap_clear(h);
+
+        if (h->buckets != (struct hashmap_entry**) ((uint8_t*) h + ALIGN(sizeof(Hashmap))))
+                free(h->buckets);
 
         if (h->from_pool)
                 deallocate_tile(&first_hashmap_tile, h);
@@ -353,17 +385,74 @@ void hashmap_clear_free_free(Hashmap *h) {
         }
 }
 
-
 static struct hashmap_entry *hash_scan(Hashmap *h, unsigned hash, const void *key) {
         struct hashmap_entry *e;
         assert(h);
-        assert(hash < NBUCKETS);
+        assert(hash < h->n_buckets);
 
-        for (e = BY_HASH(h)[hash]; e; e = e->bucket_next)
+        for (e = h->buckets[hash]; e; e = e->bucket_next)
                 if (h->compare_func(e->key, key) == 0)
                         return e;
 
         return NULL;
+}
+
+static bool resize_buckets(Hashmap *h) {
+        struct hashmap_entry **n, *i;
+        unsigned m;
+        uint8_t nkey[HASH_KEY_SIZE];
+
+        assert(h);
+
+        if (_likely_(h->n_entries*4 < h->n_buckets*3))
+                return false;
+
+        /* Increase by four */
+        m = (h->n_entries+1)*4-1;
+
+        /* If we hit OOM we simply risk packed hashmaps... */
+        n = new0(struct hashmap_entry*, m);
+        if (!n)
+                return false;
+
+        /* Let's use a different randomized hash key for the
+         * extension, so that people cannot guess what we are using
+         * here forever */
+        get_hash_key(nkey, false);
+
+        for (i = h->iterate_list_head; i; i = i->iterate_next) {
+                unsigned long old_bucket, new_bucket;
+
+                old_bucket = h->hash_func(i->key, h->hash_key) % h->n_buckets;
+
+                /* First, drop from old bucket table */
+                if (i->bucket_next)
+                        i->bucket_next->bucket_previous = i->bucket_previous;
+
+                if (i->bucket_previous)
+                        i->bucket_previous->bucket_next = i->bucket_next;
+                else
+                        h->buckets[old_bucket] = i->bucket_next;
+
+                /* Then, add to new backet table */
+                new_bucket = h->hash_func(i->key, nkey)  % m;
+
+                i->bucket_next = n[new_bucket];
+                i->bucket_previous = NULL;
+                if (n[new_bucket])
+                        n[new_bucket]->bucket_previous = i;
+                n[new_bucket] = i;
+        }
+
+        if (h->buckets != (struct hashmap_entry**) ((uint8_t*) h + ALIGN(sizeof(Hashmap))))
+                free(h->buckets);
+
+        h->buckets = n;
+        h->n_buckets = m;
+
+        memcpy(h->hash_key, nkey, HASH_KEY_SIZE);
+
+        return true;
 }
 
 int hashmap_put(Hashmap *h, const void *key, void *value) {
@@ -372,19 +461,19 @@ int hashmap_put(Hashmap *h, const void *key, void *value) {
 
         assert(h);
 
-        hash = h->hash_func(key) % NBUCKETS;
-
+        hash = bucket_hash(h, key);
         e = hash_scan(h, hash, key);
         if (e) {
-
                 if (e->value == value)
                         return 0;
-
                 return -EEXIST;
         }
 
+        if (resize_buckets(h))
+                hash = bucket_hash(h, key);
+
         if (h->from_pool)
-                e = allocate_tile(&first_entry_pool, &first_entry_tile, sizeof(struct hashmap_entry));
+                e = allocate_tile(&first_entry_pool, &first_entry_tile, sizeof(struct hashmap_entry), 64U);
         else
                 e = new(struct hashmap_entry, 1);
 
@@ -405,7 +494,7 @@ int hashmap_replace(Hashmap *h, const void *key, void *value) {
 
         assert(h);
 
-        hash = h->hash_func(key) % NBUCKETS;
+        hash = bucket_hash(h, key);
         e = hash_scan(h, hash, key);
         if (e) {
                 e->key = key;
@@ -422,7 +511,7 @@ int hashmap_update(Hashmap *h, const void *key, void *value) {
 
         assert(h);
 
-        hash = h->hash_func(key) % NBUCKETS;
+        hash = bucket_hash(h, key);
         e = hash_scan(h, hash, key);
         if (!e)
                 return -ENOENT;
@@ -438,7 +527,7 @@ void* hashmap_get(Hashmap *h, const void *key) {
         if (!h)
                 return NULL;
 
-        hash = h->hash_func(key) % NBUCKETS;
+        hash = bucket_hash(h, key);
         e = hash_scan(h, hash, key);
         if (!e)
                 return NULL;
@@ -453,7 +542,7 @@ void* hashmap_get2(Hashmap *h, const void *key, void **key2) {
         if (!h)
                 return NULL;
 
-        hash = h->hash_func(key) % NBUCKETS;
+        hash = bucket_hash(h, key);
         e = hash_scan(h, hash, key);
         if (!e)
                 return NULL;
@@ -470,12 +559,8 @@ bool hashmap_contains(Hashmap *h, const void *key) {
         if (!h)
                 return false;
 
-        hash = h->hash_func(key) % NBUCKETS;
-
-        if (!hash_scan(h, hash, key))
-                return false;
-
-        return true;
+        hash = bucket_hash(h, key);
+        return !!hash_scan(h, hash, key);
 }
 
 void* hashmap_remove(Hashmap *h, const void *key) {
@@ -486,12 +571,40 @@ void* hashmap_remove(Hashmap *h, const void *key) {
         if (!h)
                 return NULL;
 
-        hash = h->hash_func(key) % NBUCKETS;
-
-        if (!(e = hash_scan(h, hash, key)))
+        hash = bucket_hash(h, key);
+        e = hash_scan(h, hash, key);
+        if (!e)
                 return NULL;
 
         data = e->value;
+        remove_entry(h, e);
+
+        return data;
+}
+
+void* hashmap_remove2(Hashmap *h, const void *key, void **rkey) {
+        struct hashmap_entry *e;
+        unsigned hash;
+        void *data;
+
+        if (!h) {
+                if (rkey)
+                        *rkey = NULL;
+                return NULL;
+        }
+
+        hash = bucket_hash(h, key);
+        e = hash_scan(h, hash, key);
+        if (!e) {
+                if (rkey)
+                        *rkey = NULL;
+                return NULL;
+        }
+
+        data = e->value;
+        if (rkey)
+                *rkey = (void*) e->key;
+
         remove_entry(h, e);
 
         return data;
@@ -504,11 +617,12 @@ int hashmap_remove_and_put(Hashmap *h, const void *old_key, const void *new_key,
         if (!h)
                 return -ENOENT;
 
-        old_hash = h->hash_func(old_key) % NBUCKETS;
-        if (!(e = hash_scan(h, old_hash, old_key)))
+        old_hash = bucket_hash(h, old_key);
+        e = hash_scan(h, old_hash, old_key);
+        if (!e)
                 return -ENOENT;
 
-        new_hash = h->hash_func(new_key) % NBUCKETS;
+        new_hash = bucket_hash(h, new_key);
         if (hash_scan(h, new_hash, new_key))
                 return -EEXIST;
 
@@ -529,13 +643,14 @@ int hashmap_remove_and_replace(Hashmap *h, const void *old_key, const void *new_
         if (!h)
                 return -ENOENT;
 
-        old_hash = h->hash_func(old_key) % NBUCKETS;
-        if (!(e = hash_scan(h, old_hash, old_key)))
+        old_hash = bucket_hash(h, old_key);
+        e = hash_scan(h, old_hash, old_key);
+        if (!e)
                 return -ENOENT;
 
-        new_hash = h->hash_func(new_key) % NBUCKETS;
-
-        if ((k = hash_scan(h, new_hash, new_key)))
+        new_hash = bucket_hash(h, new_key);
+        k = hash_scan(h, new_hash, new_key);
+        if (k)
                 if (e != k)
                         remove_entry(h, k);
 
@@ -556,9 +671,10 @@ void* hashmap_remove_value(Hashmap *h, const void *key, void *value) {
         if (!h)
                 return NULL;
 
-        hash = h->hash_func(key) % NBUCKETS;
+        hash = bucket_hash(h, key);
 
-        if (!(e = hash_scan(h, hash, key)))
+        e = hash_scan(h, hash, key);
+        if (!e)
                 return NULL;
 
         if (e->value != value)
@@ -646,9 +762,10 @@ void *hashmap_iterate_skip(Hashmap *h, const void *key, Iterator *i) {
         if (!h)
                 return NULL;
 
-        hash = h->hash_func(key) % NBUCKETS;
+        hash = bucket_hash(h, key);
 
-        if (!(e = hash_scan(h, hash, key)))
+        e = hash_scan(h, hash, key);
+        if (!e)
                 return NULL;
 
         *i = (Iterator) e;
@@ -727,6 +844,14 @@ unsigned hashmap_size(Hashmap *h) {
         return h->n_entries;
 }
 
+unsigned hashmap_buckets(Hashmap *h) {
+
+        if (!h)
+                return 0;
+
+        return h->n_buckets;
+}
+
 bool hashmap_isempty(Hashmap *h) {
 
         if (!h)
@@ -746,9 +871,9 @@ int hashmap_merge(Hashmap *h, Hashmap *other) {
         for (e = other->iterate_list_head; e; e = e->iterate_next) {
                 int r;
 
-                if ((r = hashmap_put(h, e->key, e->value)) < 0)
-                        if (r != -EEXIST)
-                                return r;
+                r = hashmap_put(h, e->key, e->value);
+                if (r < 0 && r != -EEXIST)
+                        return r;
         }
 
         return 0;
@@ -770,13 +895,11 @@ void hashmap_move(Hashmap *h, Hashmap *other) {
 
                 n = e->iterate_next;
 
-                h_hash = h->hash_func(e->key) % NBUCKETS;
-
+                h_hash = bucket_hash(h, e->key);
                 if (hash_scan(h, h_hash, e->key))
                         continue;
 
-                other_hash = other->hash_func(e->key) % NBUCKETS;
-
+                other_hash = bucket_hash(other, e->key);
                 unlink_entry(other, e, other_hash);
                 link_entry(h, e, h_hash);
         }
@@ -791,12 +914,13 @@ int hashmap_move_one(Hashmap *h, Hashmap *other, const void *key) {
 
         assert(h);
 
-        h_hash = h->hash_func(key) % NBUCKETS;
+        h_hash = bucket_hash(h, key);
         if (hash_scan(h, h_hash, key))
                 return -EEXIST;
 
-        other_hash = other->hash_func(key) % NBUCKETS;
-        if (!(e = hash_scan(other, other_hash, key)))
+        other_hash = bucket_hash(other, key);
+        e = hash_scan(other, other_hash, key);
+        if (!e)
                 return -ENOENT;
 
         unlink_entry(other, e, other_hash);
@@ -810,7 +934,8 @@ Hashmap *hashmap_copy(Hashmap *h) {
 
         assert(h);
 
-        if (!(copy = hashmap_new(h->hash_func, h->compare_func)))
+        copy = hashmap_new(h->hash_func, h->compare_func);
+        if (!copy)
                 return NULL;
 
         if (hashmap_merge(copy, h) < 0) {
@@ -849,7 +974,7 @@ void *hashmap_next(Hashmap *h, const void *key) {
         if (!h)
                 return NULL;
 
-        hash = h->hash_func(key) % NBUCKETS;
+        hash = bucket_hash(h, key);
         e = hash_scan(h, hash, key);
         if (!e)
                 return NULL;

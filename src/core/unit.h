@@ -32,15 +32,16 @@ typedef enum UnitDependency UnitDependency;
 typedef struct UnitRef UnitRef;
 typedef struct UnitStatusMessageFormats UnitStatusMessageFormats;
 
+#include "sd-event.h"
 #include "set.h"
 #include "util.h"
 #include "list.h"
 #include "socket-util.h"
 #include "execute.h"
+#include "cgroup.h"
 #include "condition.h"
 #include "install.h"
 #include "unit-name.h"
-#include "cgroup-semantics.h"
 
 enum UnitActiveState {
         UNIT_ACTIVE,
@@ -105,6 +106,9 @@ enum UnitDependency {
         UNIT_PROPAGATES_RELOAD_TO,
         UNIT_RELOAD_PROPAGATED_FROM,
 
+        /* Joins namespace of */
+        UNIT_JOINS_NAMESPACE_OF,
+
         /* Reference information for GC logic */
         UNIT_REFERENCES,              /* Inverse of 'references' is 'referenced_by' */
         UNIT_REFERENCED_BY,
@@ -115,8 +119,15 @@ enum UnitDependency {
 
 #include "manager.h"
 #include "job.h"
-#include "cgroup.h"
-#include "cgroup-attr.h"
+
+struct UnitRef {
+        /* Keeps tracks of references to a unit. This is useful so
+         * that we can merge two units if necessary and correct all
+         * references to them */
+
+        Unit* unit;
+        LIST_FIELDS(UnitRef, refs);
+};
 
 struct Unit {
         Manager *manager;
@@ -165,8 +176,12 @@ struct Unit {
         dual_timestamp inactive_enter_timestamp;
 
         /* Counterparts in the cgroup filesystem */
-        CGroupBonding *cgroup_bondings;
-        CGroupAttribute *cgroup_attributes;
+        char *cgroup_path;
+        CGroupControllerMask cgroup_realized_mask;
+        CGroupControllerMask cgroup_subtree_mask;
+        CGroupControllerMask cgroup_members_mask;
+
+        UnitRef slice;
 
         /* Per type list */
         LIST_FIELDS(Unit, units_by_type);
@@ -185,6 +200,14 @@ struct Unit {
 
         /* GC queue */
         LIST_FIELDS(Unit, gc_queue);
+
+        /* CGroup realize members queue */
+        LIST_FIELDS(Unit, cgroup_queue);
+
+        /* PIDs we keep an eye on. Note that a unit might have many
+         * more, but these are the ones we care enough about to
+         * process SIGCHLD for */
+        Set *pids;
 
         /* Used during GC sweeps */
         unsigned gc_marker;
@@ -216,8 +239,8 @@ struct Unit {
         /* Allow isolation requests */
         bool allow_isolate;
 
-        /* Isolate OnFailure unit */
-        bool on_failure_isolate;
+        /* How to start OnFailure units */
+        JobMode on_failure_job_mode;
 
         /* Ignore this unit when isolating */
         bool ignore_on_isolate;
@@ -228,25 +251,24 @@ struct Unit {
         /* Did the last condition check succeed? */
         bool condition_result;
 
+        /* Is this a transient unit? */
+        bool transient;
+
         bool in_load_queue:1;
         bool in_dbus_queue:1;
         bool in_cleanup_queue:1;
         bool in_gc_queue:1;
+        bool in_cgroup_queue:1;
 
         bool sent_dbus_new_signal:1;
 
         bool no_gc:1;
 
         bool in_audit:1;
-};
 
-struct UnitRef {
-        /* Keeps tracks of references to a unit. This is useful so
-         * that we can merge two units if necessary and correct all
-         * references to them */
-
-        Unit* unit;
-        LIST_FIELDS(UnitRef, refs);
+        bool cgroup_realized:1;
+        bool cgroup_members_mask_valid:1;
+        bool cgroup_subtree_mask_valid:1;
 };
 
 struct UnitStatusMessageFormats {
@@ -255,16 +277,25 @@ struct UnitStatusMessageFormats {
         const char *finished_stop_job[_JOB_RESULT_MAX];
 };
 
+typedef enum UnitSetPropertiesMode {
+        UNIT_CHECK = 0,
+        UNIT_RUNTIME = 1,
+        UNIT_PERSISTENT = 2,
+} UnitSetPropertiesMode;
+
 #include "service.h"
-#include "timer.h"
 #include "socket.h"
+#include "busname.h"
 #include "target.h"
+#include "snapshot.h"
 #include "device.h"
 #include "mount.h"
 #include "automount.h"
-#include "snapshot.h"
 #include "swap.h"
+#include "timer.h"
 #include "path.h"
+#include "slice.h"
+#include "scope.h"
 
 struct UnitVTable {
         /* How much memory does an object of this unit type need */
@@ -274,8 +305,21 @@ struct UnitVTable {
          * ExecContext is found, if the unit type has that */
         size_t exec_context_offset;
 
-        /* The name of the section with the exec settings of ExecContext */
-        const char *exec_section;
+        /* If greater than 0, the offset into the object where
+         * CGroupContext is found, if the unit type has that */
+        size_t cgroup_context_offset;
+
+        /* If greater than 0, the offset into the object where
+         * KillContext is found, if the unit type has that */
+        size_t kill_context_offset;
+
+        /* If greater than 0, the offset into the object where the
+         * pointer to ExecRuntime is found, if the unit type has
+         * that */
+        size_t exec_runtime_offset;
+
+        /* The name of the configuration file section with the private settings of this unit*/
+        const char *private_section;
 
         /* Config file sections this unit type understands, separated
          * by NUL chars */
@@ -306,7 +350,7 @@ struct UnitVTable {
         int (*stop)(Unit *u);
         int (*reload)(Unit *u);
 
-        int (*kill)(Unit *u, KillWho w, int signo, DBusError *error);
+        int (*kill)(Unit *u, KillWho w, int signo, sd_bus_error *error);
 
         bool (*can_reload)(Unit *u);
 
@@ -338,16 +382,15 @@ struct UnitVTable {
         /* Return true when this unit is suitable for snapshotting */
         bool (*check_snapshot)(Unit *u);
 
-        void (*fd_event)(Unit *u, int fd, uint32_t events, Watch *w);
+        /* Invoked on every child that died */
         void (*sigchld_event)(Unit *u, pid_t pid, int code, int status);
-        void (*timer_event)(Unit *u, uint64_t n_elapsed, Watch *w);
 
         /* Reset failed state if we are in failed state */
         void (*reset_failed)(Unit *u);
 
         /* Called whenever any of the cgroups this unit watches for
          * ran empty */
-        void (*cgroup_notify_empty)(Unit *u);
+        void (*notify_cgroup_empty)(Unit *u);
 
         /* Called whenever a process of this unit sends us a message */
         void (*notify_message)(Unit *u, pid_t pid, char **tags);
@@ -356,11 +399,11 @@ struct UnitVTable {
          * goes away. */
         void (*bus_name_owner_change)(Unit *u, const char *name, const char *old_owner, const char *new_owner);
 
-        /* Called whenever a bus PID lookup finishes */
-        void (*bus_query_pid_done)(Unit *u, const char *name, pid_t pid);
+        /* Called for each property that is being set */
+        int (*bus_set_property)(Unit *u, const char *name, sd_bus_message *message, UnitSetPropertiesMode mode, sd_bus_error *error);
 
-        /* Called for each message received on the bus */
-        DBusHandlerResult (*bus_message_handler)(Unit *u, DBusConnection *c, DBusMessage *message);
+        /* Called after at least one property got changed to apply the necessary change */
+        int (*bus_commit_properties)(Unit *u);
 
         /* Return the unit this unit is following */
         Unit *(*following)(Unit *u);
@@ -375,6 +418,8 @@ struct UnitVTable {
         /* Called whenever CLOCK_REALTIME made a jump */
         void (*time_change)(Unit *u);
 
+        int (*get_timeout)(Unit *u, uint64_t *timeout);
+
         /* This is called for each unit type and should be used to
          * enumerate existing devices and load them. However,
          * everything that is loaded here should still stay in
@@ -385,14 +430,13 @@ struct UnitVTable {
         /* Type specific cleanups. */
         void (*shutdown)(Manager *m);
 
-        /* When sending out PropertiesChanged signal, which properties
-         * shall be invalidated? This is a NUL separated list of
-         * strings, to minimize relocations a little. */
-        const char *bus_invalidating_properties;
-
         /* The interface name */
         const char *bus_interface;
 
+        /* The bus vtable */
+        const sd_bus_vtable *bus_vtable;
+
+        /* The strings to print in status messages */
         UnitStatusMessageFormats status_message_formats;
 
         /* Can units of this type have multiple names? */
@@ -403,6 +447,9 @@ struct UnitVTable {
 
         /* Exclude from automatic gc */
         bool no_gc:1;
+
+        /* True if transient units of this type are OK */
+        bool can_transient:1;
 };
 
 extern const UnitVTable * const unit_vtable[_UNIT_TYPE_MAX];
@@ -423,16 +470,19 @@ extern const UnitVTable * const unit_vtable[_UNIT_TYPE_MAX];
 
 #define UNIT_TRIGGER(u) ((Unit*) set_first((u)->dependencies[UNIT_TRIGGERS]))
 
-DEFINE_CAST(SOCKET, Socket);
-DEFINE_CAST(TIMER, Timer);
 DEFINE_CAST(SERVICE, Service);
+DEFINE_CAST(SOCKET, Socket);
+DEFINE_CAST(BUSNAME, BusName);
 DEFINE_CAST(TARGET, Target);
+DEFINE_CAST(SNAPSHOT, Snapshot);
 DEFINE_CAST(DEVICE, Device);
 DEFINE_CAST(MOUNT, Mount);
 DEFINE_CAST(AUTOMOUNT, Automount);
-DEFINE_CAST(SNAPSHOT, Snapshot);
 DEFINE_CAST(SWAP, Swap);
+DEFINE_CAST(TIMER, Timer);
 DEFINE_CAST(PATH, Path);
+DEFINE_CAST(SLICE, Slice);
+DEFINE_CAST(SCOPE, Scope);
 
 Unit *unit_new(Manager *m, size_t size);
 void unit_free(Unit *u);
@@ -449,11 +499,6 @@ int unit_add_dependency_by_name_inverse(Unit *u, UnitDependency d, const char *n
 int unit_add_two_dependencies_by_name_inverse(Unit *u, UnitDependency d, UnitDependency e, const char *name, const char *path, bool add_reference);
 
 int unit_add_exec_dependencies(Unit *u, ExecContext *c);
-
-int unit_add_cgroup_from_text(Unit *u, const char *name, bool overwrite, CGroupBonding **ret);
-int unit_add_default_cgroups(Unit *u);
-CGroupBonding* unit_get_default_cgroup(Unit *u);
-int unit_add_cgroup_attribute(Unit *u, const CGroupSemantics *semantics, const char *controller, const char *name, const char *value, CGroupAttribute **ret);
 
 int unit_choose_id(Unit *u, const char *name);
 int unit_set_description(Unit *u, const char *description);
@@ -474,6 +519,8 @@ int unit_load_fragment_and_dropin(Unit *u);
 int unit_load_fragment_and_dropin_optional(Unit *u);
 int unit_load(Unit *unit);
 
+int unit_add_default_slice(Unit *u, CGroupContext *c);
+
 const char *unit_description(Unit *u) _pure_;
 
 bool unit_has_name(Unit *u, const char *name);
@@ -492,19 +539,17 @@ int unit_start(Unit *u);
 int unit_stop(Unit *u);
 int unit_reload(Unit *u);
 
-int unit_kill(Unit *u, KillWho w, int signo, DBusError *error);
-int unit_kill_common(Unit *u, KillWho who, int signo, pid_t main_pid, pid_t control_pid, DBusError *error);
+int unit_kill(Unit *u, KillWho w, int signo, sd_bus_error *error);
+int unit_kill_common(Unit *u, KillWho who, int signo, pid_t main_pid, pid_t control_pid, sd_bus_error *error);
 
 void unit_notify(Unit *u, UnitActiveState os, UnitActiveState ns, bool reload_success);
 
-int unit_watch_fd(Unit *u, int fd, uint32_t events, Watch *w);
-void unit_unwatch_fd(Unit *u, Watch *w);
-
 int unit_watch_pid(Unit *u, pid_t pid);
 void unit_unwatch_pid(Unit *u, pid_t pid);
+int unit_watch_all_pids(Unit *u);
+void unit_unwatch_all_pids(Unit *u);
 
-int unit_watch_timer(Unit *u, clockid_t, bool relative, usec_t usec, Watch *w);
-void unit_unwatch_timer(Unit *u, Watch *w);
+void unit_tidy_watch_pids(Unit *u, pid_t except1, pid_t except2);
 
 int unit_watch_bus_name(Unit *u, const char *name);
 void unit_unwatch_bus_name(Unit *u, const char *name);
@@ -516,11 +561,10 @@ int set_unit_path(const char *p);
 char *unit_dbus_path(Unit *u);
 
 int unit_load_related_unit(Unit *u, const char *type, Unit **_found);
-int unit_get_related_unit(Unit *u, const char *type, Unit **_found);
 
 bool unit_can_serialize(Unit *u) _pure_;
 int unit_serialize(Unit *u, FILE *f, FDSet *fds, bool serialize_jobs);
-void unit_serialize_item_format(Unit *u, FILE *f, const char *key, const char *value, ...) _printf_attr_(4,5);
+void unit_serialize_item_format(Unit *u, FILE *f, const char *key, const char *value, ...) _printf_(4,5);
 void unit_serialize_item(Unit *u, FILE *f, const char *key, const char *value);
 int unit_deserialize(Unit *u, FILE *f, FDSet *fds);
 
@@ -528,13 +572,16 @@ int unit_add_node_link(Unit *u, const char *what, bool wants);
 
 int unit_coldplug(Unit *u);
 
-void unit_status_printf(Unit *u, const char *status, const char *unit_status_msg_format) _printf_attr_(3, 0);
+void unit_status_printf(Unit *u, const char *status, const char *unit_status_msg_format) _printf_(3, 0);
 
 bool unit_need_daemon_reload(Unit *u);
 
 void unit_reset_failed(Unit *u);
 
 Unit *unit_following(Unit *u);
+int unit_following_set(Unit *u, Set **s);
+
+const char *unit_slice_name(Unit *u);
 
 bool unit_stop_pending(Unit *u) _pure_;
 bool unit_inactive_or_pending(Unit *u) _pure_;
@@ -544,12 +591,8 @@ int unit_add_default_target_dependency(Unit *u, Unit *target);
 
 char *unit_default_cgroup_path(Unit *u);
 
-int unit_following_set(Unit *u, Set **s);
-
 void unit_start_on_failure(Unit *u);
 void unit_trigger_notify(Unit *u);
-
-bool unit_condition_test(Unit *u);
 
 UnitFileState unit_get_unit_file_state(Unit *u);
 
@@ -557,18 +600,31 @@ Unit* unit_ref_set(UnitRef *ref, Unit *u);
 void unit_ref_unset(UnitRef *ref);
 
 #define UNIT_DEREF(ref) ((ref).unit)
+#define UNIT_ISSET(ref) (!!(ref).unit)
 
-int unit_add_one_mount_link(Unit *u, Mount *m);
-int unit_add_mount_links(Unit *u);
-
-int unit_exec_context_defaults(Unit *u, ExecContext *c);
+int unit_patch_contexts(Unit *u);
 
 ExecContext *unit_get_exec_context(Unit *u) _pure_;
+KillContext *unit_get_kill_context(Unit *u) _pure_;
+CGroupContext *unit_get_cgroup_context(Unit *u) _pure_;
 
-int unit_write_drop_in(Unit *u, bool runtime, const char *name, const char *data);
-int unit_remove_drop_in(Unit *u, bool runtime, const char *name);
+ExecRuntime *unit_get_exec_runtime(Unit *u) _pure_;
+
+int unit_setup_exec_runtime(Unit *u);
+
+int unit_write_drop_in(Unit *u, UnitSetPropertiesMode mode, const char *name, const char *data);
+int unit_write_drop_in_format(Unit *u, UnitSetPropertiesMode mode, const char *name, const char *format, ...) _printf_(4,5);
+
+int unit_write_drop_in_private(Unit *u, UnitSetPropertiesMode mode, const char *name, const char *data);
+int unit_write_drop_in_private_format(Unit *u, UnitSetPropertiesMode mode, const char *name, const char *format, ...) _printf_(4,5);
+
+int unit_remove_drop_in(Unit *u, UnitSetPropertiesMode mode, const char *name);
 
 int unit_kill_context(Unit *u, KillContext *c, bool sigkill, pid_t main_pid, pid_t control_pid, bool main_pid_alien);
+
+int unit_make_transient(Unit *u);
+
+int unit_require_mounts_for(Unit *u, const char *path);
 
 const char *unit_active_state_to_string(UnitActiveState i) _const_;
 UnitActiveState unit_active_state_from_string(const char *s) _pure_;

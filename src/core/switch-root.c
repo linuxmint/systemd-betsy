@@ -30,6 +30,8 @@
 #include "util.h"
 #include "path-util.h"
 #include "switch-root.h"
+#include "mkdir.h"
+#include "base-filesystem.h"
 #include "missing.h"
 
 int switch_root(const char *new_root) {
@@ -41,11 +43,11 @@ int switch_root(const char *new_root) {
                 "/sys\0"
                 "/run\0";
 
-        int r, old_root_fd = -1;
+        _cleanup_close_ int old_root_fd = -1;
         struct stat new_root_stat;
         bool old_root_remove;
-        const char *i;
-        _cleanup_free_ char *temporary_old_root = NULL;
+        const char *i, *temporary_old_root;
+        int r;
 
         if (path_equal(new_root, "/"))
                 return 0;
@@ -56,16 +58,14 @@ int switch_root(const char *new_root) {
          * directory we choose for this, but it should be more likely
          * than not that /mnt exists and is suitable as mount point
          * and is on the same fs as the old root dir */
-        temporary_old_root = strappend(new_root, "/mnt");
-        if (!temporary_old_root)
-                return -ENOMEM;
+        temporary_old_root = strappenda(new_root, "/mnt");
+        mkdir_p(temporary_old_root, 0755);
 
         old_root_remove = in_initrd();
 
         if (stat(new_root, &new_root_stat) < 0) {
-                r = -errno;
                 log_error("Failed to stat directory %s: %m", new_root);
-                goto fail;
+                return -errno;
         }
 
         /* Work-around for a kernel bug: for some reason the kernel
@@ -83,6 +83,8 @@ int switch_root(const char *new_root) {
 
                 snprintf(new_mount, sizeof(new_mount), "%s%s", new_root, i);
                 char_array_0(new_mount);
+
+                mkdir_parents(new_mount, 0755);
 
                 if ((stat(new_mount, &sb) < 0) ||
                     sb.st_dev != new_root_stat.st_dev) {
@@ -103,10 +105,15 @@ int switch_root(const char *new_root) {
                 }
         }
 
+        r = base_filesystem_create(new_root);
+        if (r < 0) {
+                log_error("Failed to create the base filesystem: %s", strerror(-r));
+                return r;
+        }
+
         if (chdir(new_root) < 0) {
-                r = -errno;
                 log_error("Failed to change directory to %s: %m", new_root);
-                goto fail;
+                return -errno;
         }
 
         if (old_root_remove) {
@@ -123,27 +130,23 @@ int switch_root(const char *new_root) {
                 /* Immediately get rid of the old root. Since we are
                  * running off it we need to do this lazily. */
                 if (umount2(temporary_old_root, MNT_DETACH) < 0) {
-                        r = -errno;
                         log_error("Failed to umount old root dir %s: %m", temporary_old_root);
-                        goto fail;
+                        return -errno;
                 }
 
         } else if (mount(new_root, "/", NULL, MS_MOVE, NULL) < 0) {
-                r = -errno;
                 log_error("Failed to mount moving %s to /: %m", new_root);
-                goto fail;
+                return -errno;
         }
 
         if (chroot(".") < 0) {
-                r = -errno;
                 log_error("Failed to change root: %m");
-                goto fail;
+                return -errno;
         }
 
         if (chdir("/") < 0) {
-                r = -errno;
                 log_error("Failed to change directory: %m");
-                goto fail;
+                return -errno;
         }
 
         if (old_root_fd >= 0) {
@@ -157,11 +160,5 @@ int switch_root(const char *new_root) {
                 }
         }
 
-        r = 0;
-
-fail:
-        if (old_root_fd >= 0)
-                close_nointr_nofail(old_root_fd);
-
-        return r;
+        return 0;
 }

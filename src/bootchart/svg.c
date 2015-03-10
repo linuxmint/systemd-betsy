@@ -3,7 +3,7 @@
 /***
   This file is part of systemd.
 
-  Copyright (C) 2009-2013 Intel Coproration
+  Copyright (C) 2009-2013 Intel Corporation
 
   Authors:
     Auke Kok <auke-jan.h.kok@intel.com>
@@ -68,20 +68,22 @@ static double idletime = -1.0;
 static int pfiltered = 0;
 static int pcount = 0;
 static int kcount = 0;
-static float psize = 0;
-static float ksize = 0;
-static float esize = 0;
+static double psize = 0;
+static double ksize = 0;
+static double esize = 0;
 static struct list_sample_data *sampledata;
 static struct list_sample_data *prev_sampledata;
 extern struct list_sample_data *head;
 
 static void svg_header(void) {
-        float w;
-        float h;
+        double w;
+        double h;
         struct list_sample_data *sampledata_last;
 
+        assert(head);
+
         sampledata = head;
-        LIST_FIND_TAIL(struct list_sample_data, link, sampledata, head);
+        LIST_FIND_TAIL(link, sampledata, head);
         sampledata_last = head;
         LIST_FOREACH_BEFORE(link, sampledata, head) {
                 sampledata_last = sampledata;
@@ -123,6 +125,7 @@ static void svg_header(void) {
         svg("<defs>\n  <style type=\"text/css\">\n    <![CDATA[\n");
 
         svg("      rect       { stroke-width: 1; }\n");
+        svg("      rect.bg    { fill: rgb(255,255,255); }\n");
         svg("      rect.cpu   { fill: rgb(64,64,240); stroke-width: 0; fill-opacity: 0.7; }\n");
         svg("      rect.wait  { fill: rgb(240,240,0); stroke-width: 0; fill-opacity: 0.7; }\n");
         svg("      rect.bi    { fill: rgb(240,128,128); stroke-width: 0; fill-opacity: 0.7; }\n");
@@ -420,12 +423,9 @@ static void svg_pss_graph(void) {
         i = 1;
         LIST_FOREACH_BEFORE(link, sampledata, head) {
                 int bottom;
-                int top;
+                int top = 0;
                 struct ps_sched_struct *prev_sample;
                 struct ps_sched_struct *cross_place;
-
-                bottom = 0;
-                top = 0;
 
                 /* put all the small pss blocks into the bottom */
                 ps = ps_first->next_ps;
@@ -512,7 +512,7 @@ static void svg_pss_graph(void) {
                         continue;
 
                 enc_name = xml_comment_encode(ps->name);
-                if(!enc_name)
+                if (!enc_name)
                         continue;
 
                 svg("<!-- %s [%d] pss=", enc_name, ps->pid);
@@ -533,8 +533,8 @@ static void svg_io_bi_bar(void) {
         int max_here = 0;
         int i;
         int k;
-        struct list_sample_data *start_sampledata = sampledata;
-        struct list_sample_data *stop_sampledata = sampledata;
+        struct list_sample_data *start_sampledata;
+        struct list_sample_data *stop_sampledata;
 
         svg("<!-- IO utilization graph - In -->\n");
 
@@ -599,10 +599,7 @@ static void svg_io_bi_bar(void) {
                 int stop;
                 int diff;
                 double tot;
-                double pbi;
-
-                tot = 0;
-                pbi = 0;
+                double pbi = 0;
 
                 start = MAX(i - ((range / 2) - 1), 0);
                 stop = MIN(i + (range / 2), samples);
@@ -647,8 +644,8 @@ static void svg_io_bo_bar(void) {
         int max_here = 0;
         int i;
         int k;
-        struct list_sample_data *start_sampledata = sampledata;
-        struct list_sample_data *stop_sampledata = sampledata;
+        struct list_sample_data *start_sampledata;
+        struct list_sample_data *stop_sampledata;
 
         svg("<!-- IO utilization graph - out -->\n");
 
@@ -711,7 +708,6 @@ static void svg_io_bo_bar(void) {
                 double tot;
                 double pbo;
 
-                tot = 0;
                 pbo = 0;
 
                 start = MAX(i - ((range / 2) - 1), 0);
@@ -1015,7 +1011,7 @@ static void svg_ps_bars(void) {
                 int t;
 
                 enc_name = xml_comment_encode(ps->name);
-                if(!enc_name)
+                if (!enc_name)
                         continue;
 
                 /* leave some trace of what we actually filtered etc. */
@@ -1100,12 +1096,13 @@ static void svg_ps_bars(void) {
                         w = starttime;
 
                 /* text label of process name */
-                svg("  <text x=\"%.03f\" y=\"%.03f\"><![CDATA[%s]]> [%i]<tspan class=\"run\">%.03fs</tspan></text>\n",
+                svg("  <text x=\"%.03f\" y=\"%.03f\"><![CDATA[%s]]> [%i]<tspan class=\"run\">%.03fs</tspan> %s</text>\n",
                     time_to_graph(w - graph_start) + 5.0,
                     ps_to_graph(j) + 14.0,
                     ps->name,
                     ps->pid,
-                    (ps->last->runtime - ps->first->runtime) / 1000000000.0);
+                    (ps->last->runtime - ps->first->runtime) / 1000000000.0,
+                    arg_show_cgroup ? ps->cgroup : "");
                 /* paint lines to the parent process */
                 if (ps->parent) {
                         /* horizontal part */
@@ -1255,7 +1252,7 @@ static void svg_top_ten_pss(void) {
 void svg_do(const char *build) {
         struct ps_struct *ps;
 
-        memset(&str, 0, sizeof(str));
+        memzero(&str, sizeof(str));
 
         ps = ps_first;
 
@@ -1276,6 +1273,7 @@ void svg_do(const char *build) {
 
         /* after this, we can draw the header with proper sizing */
         svg_header();
+        svg("<rect class=\"bg\" width=\"100%%\" height=\"100%%\" />\n\n");
 
         svg("<g transform=\"translate(10,400)\">\n");
         svg_io_bi_bar();

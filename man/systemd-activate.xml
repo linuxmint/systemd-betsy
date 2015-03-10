@@ -21,7 +21,8 @@ You should have received a copy of the GNU Lesser General Public License
 along with systemd; If not, see <http://www.gnu.org/licenses/>.
 -->
 
-<refentry id="systemd-activate">
+<refentry id="systemd-activate"
+          xmlns:xi="http://www.w3.org/2001/XInclude">
 
   <refentryinfo>
     <title>systemd-activate</title>
@@ -49,7 +50,7 @@ along with systemd; If not, see <http://www.gnu.org/licenses/>.
 
   <refsynopsisdiv>
     <cmdsynopsis>
-      <command>/usr/lib/systemd/systemd-activate</command>
+      <command>/lib/systemd/systemd-activate</command>
       <arg choice="opt" rep="repeat">OPTIONS</arg>
       <arg choice="plain"><replaceable>daemon</replaceable></arg>
       <arg choice="opt" rep="repeat">OPTIONS</arg>
@@ -84,21 +85,6 @@ along with systemd; If not, see <http://www.gnu.org/licenses/>.
     <title>Options</title>
     <variablelist>
       <varlistentry>
-        <term><option>--help</option></term>
-        <term><option>-h</option></term>
-
-        <listitem><para>Prints a short help
-        text and exits.</para></listitem>
-      </varlistentry>
-
-      <varlistentry>
-        <term><option>--version</option></term>
-
-        <listitem><para>Prints a short version
-        string and exits.</para></listitem>
-      </varlistentry>
-
-      <varlistentry>
         <term><option>-l <replaceable>address</replaceable></option></term>
         <term><option>--listen=<replaceable>address</replaceable></option></term>
 
@@ -119,15 +105,18 @@ along with systemd; If not, see <http://www.gnu.org/licenses/>.
 
       <varlistentry>
         <term><option>-E <replaceable>VAR</replaceable><optional>=<replaceable>VALUE</replaceable></optional></option></term>
-        <term><option>--environment=<replaceable>VAR</replaceable><optional>=<replaceable>VALUE</replaceable></optional></option></term>
+        <term><option>--setenv=<replaceable>VAR</replaceable><optional>=<replaceable>VALUE</replaceable></optional></option></term>
 
         <listitem><para>Add this variable to the environment of the
         launched process. If <replaceable>VAR</replaceable> is
-        followed by <literal>=</literal> assume that it is a
-        variable–value pair. Otherwise obtain the value from the
+        followed by <literal>=</literal>, assume that it is a
+        variable–value pair. Otherwise, obtain the value from the
         environment of <command>systemd-activate</command> itself.
         </para></listitem>
       </varlistentry>
+
+      <xi:include href="standard-options.xml" xpointer="help" />
+      <xi:include href="standard-options.xml" xpointer="version" />
     </variablelist>
   </refsect1>
 
@@ -157,7 +146,7 @@ along with systemd; If not, see <http://www.gnu.org/licenses/>.
   <refsect1>
     <title>Example 1</title>
 
-    <programlisting>$ /usr/lib/systemd/systemd-activate -l 2000 -a cat</programlisting>
+    <programlisting>$ /lib/systemd/systemd-activate -l 2000 -a cat</programlisting>
 
     <para>This runs an echo server on port 2000.</para>
   </refsect1>
@@ -165,7 +154,7 @@ along with systemd; If not, see <http://www.gnu.org/licenses/>.
   <refsect1>
     <title>Example 2</title>
 
-    <programlisting>$ /usr/lib/systemd/systemd-activate -l 19531 /usr/lib/systemd/systemd-journal-gatewayd</programlisting>
+    <programlisting>$ /lib/systemd/systemd-activate -l 19531 /lib/systemd/systemd-journal-gatewayd</programlisting>
 
     <para>This runs a socket activated instance of
     <citerefentry><refentrytitle>systemd-journal-gatewayd</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>

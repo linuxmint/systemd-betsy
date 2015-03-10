@@ -138,7 +138,7 @@ Subject: Time zone change to @TIMEZONE@
 Defined-By: systemd
 Support: http://lists.freedesktop.org/mailman/listinfo/systemd-devel
 
-The system time zone has been changed to @TIMEZONE@.
+The system timezone has been changed to @TIMEZONE@.
 
 -- b07a249cd024414a82dd00cd181378ff
 Subject: System start-up is now complete
@@ -204,7 +204,6 @@ Unit @UNIT@ has begun shutting down.
 Subject: Unit @UNIT@ has finished shutting down
 Defined-By: systemd
 Support: http://lists.freedesktop.org/mailman/listinfo/systemd-devel
-Documentation: http://www.freedesktop.org/wiki/Software/systemd/catalog/@MESSAGE_ID@
 
 Unit @UNIT@ has finished shutting down.
 
@@ -212,7 +211,6 @@ Unit @UNIT@ has finished shutting down.
 Subject: Unit @UNIT@ has failed
 Defined-By: systemd
 Support: http://lists.freedesktop.org/mailman/listinfo/systemd-devel
-Documentation: http://www.freedesktop.org/wiki/Software/systemd/catalog/@MESSAGE_ID@
 
 Unit @UNIT@ has failed.
 
@@ -222,7 +220,6 @@ The result is @RESULT@.
 Subject: Unit @UNIT@ has begun with reloading its configuration
 Defined-By: systemd
 Support: http://lists.freedesktop.org/mailman/listinfo/systemd-devel
-Documentation: http://www.freedesktop.org/wiki/Software/systemd/catalog/@MESSAGE_ID@
 
 Unit @UNIT@ has begun with reloading its configuration
 
@@ -230,7 +227,6 @@ Unit @UNIT@ has begun with reloading its configuration
 Subject: Unit @UNIT@ has finished reloading its configuration
 Defined-By: systemd
 Support: http://lists.freedesktop.org/mailman/listinfo/systemd-devel
-Documentation: http://www.freedesktop.org/wiki/Software/systemd/catalog/@MESSAGE_ID@
 
 Unit @UNIT@ has finished reloading its configuration
 
@@ -240,7 +236,6 @@ The result is @RESULT@.
 Subject: Process @EXECUTABLE@ could not be executed
 Defined-By: systemd
 Support: http://lists.freedesktop.org/mailman/listinfo/systemd-devel
-Documentation: http://www.freedesktop.org/wiki/Software/systemd/catalog/@MESSAGE_ID@
 
 The process @EXECUTABLE@ could not be executed and failed.
 
@@ -250,7 +245,6 @@ The error number returned while executing this process is @ERRNO@.
 Subject: One or more messages could not be forwarded to syslog
 Defined-By: systemd
 Support: http://lists.freedesktop.org/mailman/listinfo/systemd-devel
-Documentation: http://www.freedesktop.org/wiki/Software/systemd/catalog/@MESSAGE_ID@
 
 One or more messages could not be forwarded to the syslog service
 running side-by-side with journald. This usually indicates that the
@@ -261,7 +255,6 @@ messages queued.
 Subject: Mount point is not empty
 Defined-By: systemd
 Support: http://lists.freedesktop.org/mailman/listinfo/systemd-devel
-Documentation: http://www.freedesktop.org/wiki/Software/systemd/catalog/@MESSAGE_ID@
 
 The directory @WHERE@ is specified as the mount point (second field in
 /etc/fstab or Where= field in systemd unit file) and is not empty.
@@ -269,3 +262,19 @@ This does not interfere with mounting, but the pre-exisiting files in
 this directory become inaccessible. To see those over-mounted files,
 please manually mount the underlying file system to a secondary
 location.
+
+-- 24d8d4452573402496068381a6312df2
+Subject: A virtual machine or container has been started
+Defined-By: systemd
+Support: http://lists.freedesktop.org/mailman/listinfo/systemd-devel
+
+The virtual machine @NAME@ with its leader PID @LEADER@ has been
+started is now ready to use.
+
+-- 58432bd3bace477cb514b56381b8a758
+Subject: A virtual machine or container has been terminated
+Defined-By: systemd
+Support: http://lists.freedesktop.org/mailman/listinfo/systemd-devel
+
+The virtual machine @NAME@ with its leader PID @LEADER@ has been
+shut down.

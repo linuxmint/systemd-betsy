@@ -6,8 +6,17 @@
 /* Canonical host string. */
 #undef CANONICAL_HOST
 
+/* Default DNS Servers */
+#undef DNS_SERVERS
+
 /* Define if EFI support is to be enabled */
 #undef ENABLE_EFI
+
+/* Define if kdbus support is to be enabled */
+#undef ENABLE_KDBUS
+
+/* Define if networkd support is to be enabled */
+#undef ENABLE_NETWORKD
 
 /* Define if PolicyKit support is to be enabled */
 #undef ENABLE_POLKIT
@@ -18,11 +27,11 @@
 /* Define to 1 if you have the <acl/libacl.h> header file. */
 #undef HAVE_ACL_LIBACL_H
 
+/* Define if AppArmor is available */
+#undef HAVE_APPARMOR
+
 /* Define to 1 if you have the <arpa/inet.h> header file. */
 #undef HAVE_ARPA_INET_H
-
-/* Define to 1 if you have the <attr/xattr.h> header file. */
-#undef HAVE_ATTR_XATTR_H
 
 /* AUDIT available */
 #undef HAVE_AUDIT
@@ -33,9 +42,40 @@
 /* Define if CHKCONFIG is available */
 #undef HAVE_CHKCONFIG
 
+/* Define if dbus-1 library is available */
+#undef HAVE_DBUS
+
 /* Define to 1 if you have the declaration of `gettid', and to 0 if you don't.
    */
 #undef HAVE_DECL_GETTID
+
+/* Define to 1 if you have the declaration of `IFLA_BOND_AD_INFO', and to 0 if
+   you don't. */
+#undef HAVE_DECL_IFLA_BOND_AD_INFO
+
+/* Define to 1 if you have the declaration of `IFLA_BRIDGE_VLAN_INFO', and to
+   0 if you don't. */
+#undef HAVE_DECL_IFLA_BRIDGE_VLAN_INFO
+
+/* Define to 1 if you have the declaration of
+   `IFLA_IPTUN_6RD_RELAY_PREFIXLEN', and to 0 if you don't. */
+#undef HAVE_DECL_IFLA_IPTUN_6RD_RELAY_PREFIXLEN
+
+/* Define to 1 if you have the declaration of `IFLA_PHYS_PORT_ID', and to 0 if
+   you don't. */
+#undef HAVE_DECL_IFLA_PHYS_PORT_ID
+
+/* Define to 1 if you have the declaration of `IFLA_VLAN_PROTOCOL', and to 0
+   if you don't. */
+#undef HAVE_DECL_IFLA_VLAN_PROTOCOL
+
+/* Define to 1 if you have the declaration of `IFLA_VXLAN_LOCAL6', and to 0 if
+   you don't. */
+#undef HAVE_DECL_IFLA_VXLAN_LOCAL6
+
+/* Define to 1 if you have the declaration of `LO_FLAGS_PARTSCAN', and to 0 if
+   you don't. */
+#undef HAVE_DECL_LO_FLAGS_PARTSCAN
 
 /* Define to 1 if you have the declaration of `name_to_handle_at', and to 0 if
    you don't. */
@@ -45,8 +85,18 @@
    don't. */
 #undef HAVE_DECL_PIVOT_ROOT
 
+/* Define to 1 if you have the declaration of `setns', and to 0 if you don't.
+   */
+#undef HAVE_DECL_SETNS
+
 /* Define to 1 if you have the <dlfcn.h> header file. */
 #undef HAVE_DLFCN_H
+
+/* ELFUTILS available */
+#undef HAVE_ELFUTILS
+
+/* Define to 1 if you have the <elfutils/libdwfl.h> header file. */
+#undef HAVE_ELFUTILS_LIBDWFL_H
 
 /* Define to 1 if you have the `fanotify_init' function. */
 #undef HAVE_FANOTIFY_INIT
@@ -75,6 +125,9 @@
 /* Define if glib is available */
 #undef HAVE_GLIB
 
+/* Define if gnutls is available */
+#undef HAVE_GNUTLS
+
 /* Define if IMA is available */
 #undef HAVE_IMA
 
@@ -93,11 +146,17 @@
 /* Define if libcryptsetup is available */
 #undef HAVE_LIBCRYPTSETUP
 
-/* Have tcpwrap? */
-#undef HAVE_LIBWRAP
+/* Define to 1 if you have the `dw' library (-ldw). */
+#undef HAVE_LIBDW
+
+/* Define to 1 if you have the <linux/btrfs.h> header file. */
+#undef HAVE_LINUX_BTRFS_H
 
 /* Logind support available */
 #undef HAVE_LOGIND
+
+/* Machined support available */
+#undef HAVE_MACHINED
 
 /* Define to 1 if your system has a GNU libc compatible `malloc' function, and
    to 0 otherwise. */
@@ -127,6 +186,9 @@
 /* Define if qrencode is available */
 #undef HAVE_QRENCODE
 
+/* Define if seccomp is available */
+#undef HAVE_SECCOMP
+
 /* Define to 1 if you have the `secure_getenv' function. */
 #undef HAVE_SECURE_GETENV
 
@@ -144,6 +206,9 @@
 
 /* Define if SELinux is available */
 #undef HAVE_SELINUX
+
+/* Define if SMACK is available */
+#undef HAVE_SMACK
 
 /* Define to 1 if you have the `socket' function. */
 #undef HAVE_SOCKET
@@ -187,6 +252,9 @@
 /* Define to 1 if you have the <sys/acl.h> header file. */
 #undef HAVE_SYS_ACL_H
 
+/* Define to 1 if you have the <sys/auxv.h> header file. */
+#undef HAVE_SYS_AUXV_H
+
 /* Define to 1 if you have the <sys/capability.h> header file. */
 #undef HAVE_SYS_CAPABILITY_H
 
@@ -214,8 +282,8 @@
 /* Define to 1 if you have the <valgrind/memcheck.h> header file. */
 #undef HAVE_VALGRIND_MEMCHECK_H
 
-/* XATTR available */
-#undef HAVE_XATTR
+/* Define to 1 if you have the <valgrind/valgrind.h> header file. */
+#undef HAVE_VALGRIND_VALGRIND_H
 
 /* Define if XZ is available */
 #undef HAVE_XZ
@@ -233,8 +301,8 @@
    */
 #undef LT_OBJDIR
 
-/* Define to 1 if your C compiler doesn't accept -c and -o together. */
-#undef NO_MINUS_C_MINUS_O
+/* Default NTP Servers */
+#undef NTP_SERVERS
 
 /* Name of package */
 #undef PACKAGE
@@ -272,11 +340,38 @@
 /* Define to the type of arg 5 for `select'. */
 #undef SELECT_TYPE_ARG5
 
+/* The size of `gid_t', as computed by sizeof. */
+#undef SIZEOF_GID_T
+
+/* The size of `pid_t', as computed by sizeof. */
+#undef SIZEOF_PID_T
+
+/* The size of `rlim_t', as computed by sizeof. */
+#undef SIZEOF_RLIM_T
+
+/* The size of `time_t', as computed by sizeof. */
+#undef SIZEOF_TIME_T
+
+/* The size of `uid_t', as computed by sizeof. */
+#undef SIZEOF_UID_T
+
+/* Run with a smack label */
+#undef SMACK_RUN_LABEL
+
 /* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
 
+/* Maximum System GID */
+#undef SYSTEM_GID_MAX
+
+/* Maximum System UID */
+#undef SYSTEM_UID_MAX
+
 /* Path to telinit */
 #undef TELINIT
+
+/* Time Epoch */
+#undef TIME_EPOCH
 
 /* Define to 1 if you can safely include both <sys/time.h> and <time.h>. */
 #undef TIME_WITH_SYS_TIME

@@ -39,10 +39,12 @@
 
 static int files_add(Hashmap *h, const char *root, const char *path, const char *suffix) {
         _cleanup_closedir_ DIR *dir = NULL;
-        _cleanup_free_ char *dirpath = NULL;
+        char *dirpath;
 
-        if (asprintf(&dirpath, "%s%s", root ? root : "", path) < 0)
-                return -ENOMEM;
+        assert(path);
+        assert(suffix);
+
+        dirpath = strappenda(root ? root : "", path);
 
         dir = opendir(dirpath);
         if (!dir) {
@@ -53,13 +55,13 @@ static int files_add(Hashmap *h, const char *root, const char *path, const char 
 
         for (;;) {
                 struct dirent *de;
-                union dirent_storage buf;
                 char *p;
                 int r;
 
-                r = readdir_r(dir, &buf.de, &de);
-                if (r != 0)
-                        return -r;
+                errno = 0;
+                de = readdir(dir);
+                if (!de && errno != 0)
+                        return -errno;
 
                 if (!de)
                         break;
@@ -71,7 +73,7 @@ static int files_add(Hashmap *h, const char *root, const char *path, const char 
                 if (!p)
                         return -ENOMEM;
 
-                r = hashmap_put(h, path_get_file_name(p), p);
+                r = hashmap_put(h, basename(p), p);
                 if (r == -EEXIST) {
                         log_debug("Skipping overridden file: %s.", p);
                         free(p);
@@ -92,11 +94,11 @@ static int base_cmp(const void *a, const void *b) {
 
         s1 = *(char * const *)a;
         s2 = *(char * const *)b;
-        return strcmp(path_get_file_name(s1), path_get_file_name(s2));
+        return strcmp(basename(s1), basename(s2));
 }
 
 static int conf_files_list_strv_internal(char ***strv, const char *suffix, const char *root, char **dirs) {
-        Hashmap *fh;
+        _cleanup_hashmap_free_ Hashmap *fh = NULL;
         char **files, **p;
         int r;
 
@@ -104,7 +106,7 @@ static int conf_files_list_strv_internal(char ***strv, const char *suffix, const
         assert(suffix);
 
         /* This alters the dirs string array */
-        if (!path_strv_canonicalize_uniq(dirs))
+        if (!path_strv_resolve_uniq(dirs, root))
                 return -ENOMEM;
 
         fh = hashmap_new(string_hash_func, string_compare_func);
@@ -114,7 +116,6 @@ static int conf_files_list_strv_internal(char ***strv, const char *suffix, const
         STRV_FOREACH(p, dirs) {
                 r = files_add(fh, root, *p, suffix);
                 if (r == -ENOMEM) {
-                        hashmap_free_free(fh);
                         return r;
                 } else if (r < 0)
                         log_debug("Failed to search for files in %s: %s",
@@ -123,14 +124,12 @@ static int conf_files_list_strv_internal(char ***strv, const char *suffix, const
 
         files = hashmap_get_strv(fh);
         if (files == NULL) {
-                hashmap_free_free(fh);
                 return -ENOMEM;
         }
 
-        qsort(files, hashmap_size(fh), sizeof(char *), base_cmp);
+        qsort_safe(files, hashmap_size(fh), sizeof(char *), base_cmp);
         *strv = files;
 
-        hashmap_free(fh);
         return 0;
 }
 

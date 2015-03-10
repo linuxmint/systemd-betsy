@@ -54,7 +54,7 @@
         <refsect1>
                 <title>Description</title>
 
-                <para>This file configures various parameters of the systemd login manager <citerefentry><refentrytitle>systemd-logind.service</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
+                <para>This file configures various parameters of the systemd login manager, <citerefentry><refentrytitle>systemd-logind.service</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
 
         </refsect1>
 
@@ -72,58 +72,58 @@
                                 <listitem><para>Takes a positive
                                 integer. Configures how many virtual
                                 terminals (VTs) to allocate by default
-                                that -- when switched to and
-                                previously unused --
+                                that, when switched to and are
+                                previously unused,
                                 <literal>autovt</literal> services are
                                 automatically spawned on. These
                                 services are instantiated from the
                                 template unit
                                 <filename>autovt@.service</filename>
                                 for the respective VT TTY name,
-                                e.g. <filename>autovt@tty4.service</filename>. By
-                                default
+                                for example, <filename>autovt@tty4.service</filename>. By
+                                default,
                                 <filename>autovt@.service</filename>
                                 is linked to
-                                <filename>getty@.service</filename>,
-                                i.e. login prompts are started
+                                <filename>getty@.service</filename>.
+                                In other words, login prompts are started
                                 dynamically as the user switches to
                                 unused virtual terminals. Hence, this
                                 parameter controls how many login
                                 <literal>gettys</literal> are
                                 available on the VTs. If a VT is
                                 already used by some other subsystem
-                                (for example a graphical login) this
+                                (for example, a graphical login), this
                                 kind of activation will not be
                                 attempted. Note that the VT configured
                                 in <varname>ReserveVT=</varname> is
                                 always subject to this kind of
                                 activation, even if it is not one of
-                                VTs configured with the
+                                the VTs configured with the
                                 <varname>NAutoVTs=</varname>
                                 directive. Defaults to 6. When set to
                                 0, automatic spawning of
                                 <literal>autovt</literal> services is
-                                disabled. </para></listitem>
+                                disabled.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><varname>ReserveVT=</varname></term>
 
                                 <listitem><para>Takes a positive
-                                integer. Configures the number of one
+                                integer. Identifies one
                                 virtual terminal that shall
                                 unconditionally be reserved for
                                 <filename>autovt@.service</filename>
                                 activation (see above). The VT
                                 selected with this option will be
-                                marked busy unconditionally so that no
+                                marked busy unconditionally, so that no
                                 other subsystem will allocate it. This
-                                functionality is useful to ensure that
-                                regardless how many VTs are allocated
-                                by other subsystems one login
+                                functionality is useful to ensure that,
+                                regardless of how many VTs are allocated
+                                by other subsystems, one login
                                 <literal>getty</literal> is always
-                                available. Defaults to 6 (with other
-                                words: there'll always be a
+                                available. Defaults to 6 (in other
+                                words, there will always be a
                                 <literal>getty</literal> available on
                                 Alt-F6.). When set to 0, VT
                                 reservation is
@@ -136,9 +136,36 @@
                                 <listitem><para>Takes a boolean
                                 argument. Configures whether the
                                 processes of a user should be killed
-                                when she or he completely logs out (i.e. after
-                                her/his last session ended). Defaults to
-                                <literal>no</literal>.</para></listitem>
+                                when the user completely logs out (i.e. after
+                                the user's last session ended). Defaults to
+                                <literal>no</literal>.</para>
+
+                                <para>Note that setting
+                                <varname>KillUserProcesses=1</varname>
+                                will break tools like
+                                <citerefentry><refentrytitle>screen</refentrytitle><manvolnum>1</manvolnum></citerefentry>.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><varname>KillOnlyUsers=</varname></term>
+                                <term><varname>KillExcludeUsers=</varname></term>
+
+                                <listitem><para>These settings take
+                                space-separated lists of usernames
+                                that influence the effect of
+                                <varname>KillUserProcesses=</varname>. If
+                                not empty, only processes of users
+                                listed in
+                                <varname>KillOnlyUsers=</varname> will
+                                be killed when they log out
+                                entirely. Processes of users listed in
+                                <varname>KillExcludeUsers=</varname>
+                                are excluded from being
+                                killed. <varname>KillExcludeUsers=</varname>
+                                defaults to <literal>root</literal>
+                                and takes precedence over
+                                <varname>KillOnlyUsers=</varname>,
+                                which defaults to the empty list.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -153,7 +180,7 @@
                                 <literal>kexec</literal>,
                                 <literal>suspend</literal>,
                                 <literal>hibernate</literal>,
-                                <literal>hybrid-sleep</literal>,
+                                <literal>hybrid-sleep</literal>, and
                                 <literal>lock</literal>. Defaults to
                                 <literal>ignore</literal>.</para>
 
@@ -161,11 +188,11 @@
                                 user sessions correctly report the
                                 idle status to the system. The system
                                 will execute the action after all
-                                sessions reported that they are idle,
-                                and no idle inhibitor lock is active,
-                                and subsequently the time configured
+                                sessions report that they are idle,
+                                no idle inhibitor lock is active,
+                                and subsequently, the time configured
                                 with <varname>IdleActionSec=</varname>
-                                (see below) has passed.</para>
+                                (see below) has expired.</para>
                                 </listitem>
                         </varlistentry>
 
@@ -180,73 +207,16 @@
                         </varlistentry>
 
                         <varlistentry>
-                                <term><varname>KillOnlyUsers=</varname></term>
-                                <term><varname>KillExcludeUsers=</varname></term>
-
-                                <listitem><para>These settings take
-                                space separated lists of user names
-                                that influence the effect of
-                                <varname>KillUserProcesses=</varname>. If
-                                not empty only processes of users
-                                listed in
-                                <varname>KillOnlyUsers</varname> will
-                                be killed when they log out
-                                entirely. Processes of users listed in
-                                <varname>KillExcludeUsers=</varname>
-                                are excluded from being
-                                killed. <varname>KillExcludeUsers=</varname>
-                                defaults to <literal>root</literal>
-                                and takes precedence over
-                                <varname>KillOnlyUsers=</varname>
-                                which defaults to the empty list.</para></listitem>
-                        </varlistentry>
-
-                        <varlistentry>
-                                <term><varname>Controllers=</varname></term>
-                                <term><varname>ResetControllers=</varname></term>
-
-                                <listitem><para>These settings control
-                                the default control group hierarchies
-                                users logging in are added to, in
-                                addition to the
-                                <literal>name=systemd</literal> named
-                                hierarchy. These settings take space
-                                separated lists of controller
-                                names. Pass the empty string to ensure
-                                that logind does not touch any
-                                hierarchies but systemd's own. When
-                                logging in user sessions will get
-                                private control groups in all
-                                hierarchies listed in
-                                <varname>Controllers=</varname> and be
-                                reset to the root control group in all
-                                hierarchies listed in
-                                <varname>ResetControllers=</varname>. <varname>Controllers=</varname>
-                                defaults to the empty list,
-                                <varname>ResetControllers=</varname>
-                                defaults to
-                                <literal>cpu</literal>. Note that for
-                                all controllers that are not listed in
-                                either <varname>Controllers=</varname>
-                                nor
-                                <varname>ResetControllers=</varname>
-                                newly created sessions will be part of
-                                the control groups of the system
-                                service that created the
-                                session.</para></listitem>
-                        </varlistentry>
-
-                        <varlistentry>
                                 <term><varname>InhibitDelayMaxSec=</varname></term>
 
                                 <listitem><para>Specifies the maximum
                                 time a system shutdown or sleep
                                 request is delayed due to an inhibitor
                                 lock of type <literal>delay</literal>
-                                being active -- before it is ignored
-                                and the operation executed
+                                being active before the inhibitor is
+                                ignored and the operation executes
                                 anyway. Defaults to
-                                5s.</para></listitem>
+                                5.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -267,15 +237,15 @@
                                 <literal>kexec</literal>,
                                 <literal>suspend</literal>,
                                 <literal>hibernate</literal>,
-                                <literal>hybrid-sleep</literal> and
+                                <literal>hybrid-sleep</literal>, and
                                 <literal>lock</literal>. If
-                                <literal>ignore</literal> logind will
+                                <literal>ignore</literal>, logind will
                                 never handle these keys. If
-                                <literal>lock</literal> all running
-                                sessions will be screen
-                                locked. Otherwise the specified action
-                                will be taken in the respective
-                                event. Only input devices with the
+                                <literal>lock</literal>, all running
+                                sessions will be screen-locked;
+                                otherwise, the specified action will
+                                be taken in the respective event. Only
+                                input devices with the
                                 <literal>power-switch</literal> udev
                                 tag will be watched for key/lid switch
                                 events. <varname>HandlePowerKey=</varname>
@@ -287,7 +257,11 @@
                                 default to <literal>suspend</literal>.
                                 <varname>HandleHibernateKey=</varname>
                                 defaults to
-                                <literal>hibernate</literal>.</para></listitem>
+                                <literal>hibernate</literal>. Note
+                                that the lid switch is ignored if the
+                                system is inserted in a docking
+                                station, or if more than one display
+                                is connected.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -301,17 +275,17 @@
                                 sleep keys and the lid switch are
                                 subject to inhibitor locks. These
                                 settings take boolean arguments. If
-                                <literal>off</literal> the inhibitor
+                                <literal>off</literal>, the inhibitor
                                 locks taken by applications in order
                                 to block the requested operation are
-                                respected, if <literal>on</literal>
+                                respected. If <literal>on</literal>,
                                 the requested operation is executed in
                                 any
                                 case. <varname>PowerKeyIgnoreInhibited=</varname>,
                                 <varname>SuspendKeyIgnoreInhibited=</varname>
                                 and
                                 <varname>HibernateKeyIgnoreInhibited=</varname>
-                                defaults to <literal>off</literal>,
+                                default to <literal>off</literal>.
                                 <varname>LidSwitchIgnoreInhibited=</varname>
                                 defaults to
                                 <literal>yes</literal>. This means
@@ -321,21 +295,49 @@
                                 </para></listitem>
                         </varlistentry>
 
+                        <varlistentry>
+                                <term><varname>RuntimeDirectorySize=</varname></term>
+
+                                <listitem><para>Sets the size limit on
+                                the
+                                <varname>$XDG_RUNTIME_DIR</varname>
+                                runtime directory for each user who
+                                logs in. Takes a size in bytes,
+                                optionally suffixed with the usual K, G,
+                                M, and T suffixes, to the base 1024
+                                (IEC). Alternatively, a numerical
+                                percentage suffixed by <literal>%</literal>
+                                may be specified, which sets the size
+                                limit relative to the amount of
+                                physical RAM. Defaults to 10%. Note
+                                that this size is a safety limit
+                                only. As each runtime directory is a
+                                tmpfs file system, it will only consume
+                                as much memory as is needed.
+                                </para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><varname>RemoveIPC=</varname></term>
+
+                                <listitem><para>Controls whether
+                                System V and POSIX IPC objects
+                                belonging to the user shall be removed
+                                when the user fully logs out. Takes a
+                                boolean argument. If enabled, the user
+                                may not consume IPC resources after
+                                the last of his sessions
+                                terminated. This covers System V
+                                semaphores, shared memory and message
+                                queues, as well as POSIX shared memory
+                                and message queues. Note that IPC
+                                objects of the root user are excluded
+                                from the effect of this
+                                setting. Defaults to
+                                <literal>yes</literal>.</para></listitem>
+                        </varlistentry>
+
                 </variablelist>
-
-                <para>Note that setting
-                <varname>KillUserProcesses=1</varname> will break tools
-                like
-                <citerefentry><refentrytitle>screen</refentrytitle><manvolnum>1</manvolnum></citerefentry>.</para>
-
-                <para>Note that <varname>KillUserProcesses=1</varname>
-                is a weaker version of
-                <varname>kill-session-processes=1</varname> which may
-                be configured per-service for
-                <citerefentry><refentrytitle>pam_systemd</refentrytitle><manvolnum>8</manvolnum></citerefentry>. The
-                latter kills processes of a session as soon as it
-                ends, the former kills processes as soon as the last
-                session of the user ends.</para>
         </refsect1>
 
         <refsect1>

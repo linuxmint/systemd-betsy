@@ -21,14 +21,22 @@
   along with systemd; If not, see <http://www.gnu.org/licenses/>.
 ***/
 
+#include <stdbool.h>
+
 #include "macro.h"
 
-char *utf8_is_valid(const char *s) _pure_;
+#define UTF8_REPLACEMENT_CHARACTER "\xef\xbf\xbd"
+
+const char *utf8_is_valid(const char *s) _pure_;
 char *ascii_is_valid(const char *s) _pure_;
+char *utf8_escape_invalid(const char *s);
 
-char *utf8_is_printable_n(const char* str, size_t length) _pure_;
-
-char *utf8_filter(const char *s);
-char *ascii_filter(const char *s);
+bool utf8_is_printable_newline(const char* str, size_t length, bool newline) _pure_;
+_pure_ static inline bool utf8_is_printable(const char* str, size_t length) {
+        return utf8_is_printable_newline(str, length, true);
+}
 
 char *utf16_to_utf8(const void *s, size_t length);
+
+int utf8_encoded_valid_unichar(const char *str);
+int utf8_encoded_to_unichar(const char *str);

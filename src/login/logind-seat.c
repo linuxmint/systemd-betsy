@@ -27,8 +27,8 @@
 #include <linux/vt.h>
 #include <string.h>
 
-#include "systemd/sd-id128.h"
-#include "systemd/sd-messages.h"
+#include "sd-id128.h"
+#include "sd-messages.h"
 #include "logind-seat.h"
 #include "logind-acl.h"
 #include "util.h"
@@ -51,7 +51,7 @@ Seat *seat_new(Manager *m, const char *id) {
                 return NULL;
         }
 
-        s->id = path_get_file_name(s->state_file);
+        s->id = basename(s->state_file);
         s->manager = m;
 
         if (hashmap_put(m->seats, s->id, s) < 0) {
@@ -67,7 +67,7 @@ void seat_free(Seat *s) {
         assert(s);
 
         if (s->in_gc_queue)
-                LIST_REMOVE(Seat, gc_queue, s->manager->seat_gc_queue, s);
+                LIST_REMOVE(gc_queue, s->manager->seat_gc_queue, s);
 
         while (s->sessions)
                 session_free(s->sessions);
@@ -79,14 +79,15 @@ void seat_free(Seat *s) {
 
         hashmap_remove(s->manager->seats, s->id);
 
+        free(s->positions);
         free(s->state_file);
         free(s);
 }
 
 int seat_save(Seat *s) {
+        _cleanup_free_ char *temp_path = NULL;
+        _cleanup_fclose_ FILE *f = NULL;
         int r;
-        FILE *f;
-        char *temp_path;
 
         assert(s);
 
@@ -105,11 +106,11 @@ int seat_save(Seat *s) {
 
         fprintf(f,
                 "# This is private data. Do not parse.\n"
-                "IS_VTCONSOLE=%i\n"
+                "IS_SEAT0=%i\n"
                 "CAN_MULTI_SESSION=%i\n"
                 "CAN_TTY=%i\n"
                 "CAN_GRAPHICAL=%i\n",
-                seat_is_vtconsole(s),
+                seat_is_seat0(s),
                 seat_can_multi_session(s),
                 seat_can_tty(s),
                 seat_can_graphical(s));
@@ -119,9 +120,9 @@ int seat_save(Seat *s) {
 
                 fprintf(f,
                         "ACTIVE=%s\n"
-                        "ACTIVE_UID=%lu\n",
+                        "ACTIVE_UID="UID_FMT"\n",
                         s->active->id,
-                        (unsigned long) s->active->user->uid);
+                        s->active->user->uid);
         }
 
         if (s->sessions) {
@@ -138,8 +139,8 @@ int seat_save(Seat *s) {
                 fputs("UIDS=", f);
                 LIST_FOREACH(sessions_by_seat, i, s->sessions)
                         fprintf(f,
-                                "%lu%c",
-                                (unsigned long) i->user->uid,
+                                UID_FMT"%c",
+                                i->user->uid,
                                 i->sessions_by_seat_next ? ' ' : '\n');
         }
 
@@ -151,12 +152,9 @@ int seat_save(Seat *s) {
                 unlink(temp_path);
         }
 
-        fclose(f);
-        free(temp_path);
-
 finish:
         if (r < 0)
-                log_error("Failed to save seat data for %s: %s", s->id, strerror(-r));
+                log_error("Failed to save seat data %s: %s", s->state_file, strerror(-r));
 
         return r;
 }
@@ -169,24 +167,18 @@ int seat_load(Seat *s) {
         return 0;
 }
 
-static int vt_allocate(int vtnr) {
-        int fd, r;
-        char *p;
+static int vt_allocate(unsigned int vtnr) {
+        char p[sizeof("/dev/tty") + DECIMAL_STR_MAX(unsigned int)];
+        _cleanup_close_ int fd = -1;
 
         assert(vtnr >= 1);
 
-        if (asprintf(&p, "/dev/tty%i", vtnr) < 0)
-                return -ENOMEM;
-
+        snprintf(p, sizeof(p), "/dev/tty%u", vtnr);
         fd = open_terminal(p, O_RDWR|O_NOCTTY|O_CLOEXEC);
-        free(p);
+        if (fd < 0)
+                return -errno;
 
-        r = fd < 0 ? -errno : 0;
-
-        if (fd >= 0)
-                close_nointr_nofail(fd);
-
-        return r;
+        return 0;
 }
 
 int seat_preallocate_vts(Seat *s) {
@@ -201,7 +193,7 @@ int seat_preallocate_vts(Seat *s) {
         if (s->manager->n_autovts <= 0)
                 return 0;
 
-        if (!seat_can_multi_session(s))
+        if (!seat_has_vts(s))
                 return 0;
 
         for (i = 1; i <= s->manager->n_autovts; i++) {
@@ -246,13 +238,20 @@ int seat_set_active(Seat *s, Session *session) {
         old_active = s->active;
         s->active = session;
 
+        if (old_active) {
+                session_device_pause_all(old_active);
+                session_send_changed(old_active, "Active", NULL);
+        }
+
         seat_apply_acls(s, old_active);
 
-        if (session && session->started)
-                session_send_changed(session, "Active\0");
+        if (session && session->started) {
+                session_send_changed(session, "Active", NULL);
+                session_device_resume_all(session);
+        }
 
         if (!session || session->started)
-                seat_send_changed(s, "ActiveSession\0");
+                seat_send_changed(s, "ActiveSession", NULL);
 
         seat_save(s);
 
@@ -270,23 +269,94 @@ int seat_set_active(Seat *s, Session *session) {
         return 0;
 }
 
-int seat_active_vt_changed(Seat *s, int vtnr) {
+int seat_switch_to(Seat *s, unsigned int num) {
+        /* Public session positions skip 0 (there is only F1-F12). Maybe it
+         * will get reassigned in the future, so return error for now. */
+        if (!num)
+                return -EINVAL;
+
+        if (num >= s->position_count || !s->positions[num]) {
+                /* allow switching to unused VTs to trigger auto-activate */
+                if (seat_has_vts(s) && num < 64)
+                        return chvt(num);
+
+                return -EINVAL;
+        }
+
+        return session_activate(s->positions[num]);
+}
+
+int seat_switch_to_next(Seat *s) {
+        unsigned int start, i;
+
+        if (!s->position_count)
+                return -EINVAL;
+
+        start = 1;
+        if (s->active && s->active->pos > 0)
+                start = s->active->pos;
+
+        for (i = start + 1; i < s->position_count; ++i)
+                if (s->positions[i])
+                        return session_activate(s->positions[i]);
+
+        for (i = 1; i < start; ++i)
+                if (s->positions[i])
+                        return session_activate(s->positions[i]);
+
+        return -EINVAL;
+}
+
+int seat_switch_to_previous(Seat *s) {
+        unsigned int start, i;
+
+        if (!s->position_count)
+                return -EINVAL;
+
+        start = 1;
+        if (s->active && s->active->pos > 0)
+                start = s->active->pos;
+
+        for (i = start - 1; i > 0; --i)
+                if (s->positions[i])
+                        return session_activate(s->positions[i]);
+
+        for (i = s->position_count - 1; i > start; --i)
+                if (s->positions[i])
+                        return session_activate(s->positions[i]);
+
+        return -EINVAL;
+}
+
+int seat_active_vt_changed(Seat *s, unsigned int vtnr) {
         Session *i, *new_active = NULL;
         int r;
 
         assert(s);
         assert(vtnr >= 1);
 
-        if (!seat_can_multi_session(s))
+        if (!seat_has_vts(s))
                 return -EINVAL;
 
-        log_debug("VT changed to %i", vtnr);
+        log_debug("VT changed to %u", vtnr);
 
+        /* we might have earlier closing sessions on the same VT, so try to
+         * find a running one first */
         LIST_FOREACH(sessions_by_seat, i, s->sessions)
-                if (i->vtnr == vtnr) {
+                if (i->vtnr == vtnr && !i->stopping) {
                         new_active = i;
                         break;
                 }
+
+        if (!new_active) {
+                /* no running one? then we can't decide which one is the
+                 * active one, let the first one win */
+                LIST_FOREACH(sessions_by_seat, i, s->sessions)
+                        if (i->vtnr == vtnr) {
+                                new_active = i;
+                                break;
+                        }
+        }
 
         r = seat_set_active(s, new_active);
         manager_spawn_autovt(s->manager, vtnr);
@@ -297,11 +367,12 @@ int seat_active_vt_changed(Seat *s, int vtnr) {
 int seat_read_active_vt(Seat *s) {
         char t[64];
         ssize_t k;
-        int r, vtnr;
+        unsigned int vtnr;
+        int r;
 
         assert(s);
 
-        if (!seat_can_multi_session(s))
+        if (!seat_has_vts(s))
                 return 0;
 
         lseek(s->manager->console_active_fd, SEEK_SET, 0);
@@ -320,13 +391,13 @@ int seat_read_active_vt(Seat *s) {
                 return -EIO;
         }
 
-        r = safe_atoi(t+3, &vtnr);
+        r = safe_atou(t+3, &vtnr);
         if (r < 0) {
                 log_error("Failed to parse VT number %s", t+3);
                 return r;
         }
 
-        if (vtnr <= 0) {
+        if (!vtnr) {
                 log_error("VT number invalid: %s", t+3);
                 return -EIO;
         }
@@ -362,7 +433,7 @@ int seat_start(Seat *s) {
         return 0;
 }
 
-int seat_stop(Seat *s) {
+int seat_stop(Seat *s, bool force) {
         int r = 0;
 
         assert(s);
@@ -374,7 +445,7 @@ int seat_stop(Seat *s) {
                            "MESSAGE=Removed seat %s.", s->id,
                            NULL);
 
-        seat_stop_sessions(s);
+        seat_stop_sessions(s, force);
 
         unlink(s->state_file);
         seat_add_to_gc_queue(s);
@@ -387,14 +458,14 @@ int seat_stop(Seat *s) {
         return r;
 }
 
-int seat_stop_sessions(Seat *s) {
+int seat_stop_sessions(Seat *s, bool force) {
         Session *session;
         int r = 0, k;
 
         assert(s);
 
         LIST_FOREACH(sessions_by_seat, session, s->sessions) {
-                k = session_stop(session);
+                k = session_stop(session, force);
                 if (k < 0)
                         r = k;
         }
@@ -402,56 +473,130 @@ int seat_stop_sessions(Seat *s) {
         return r;
 }
 
+void seat_evict_position(Seat *s, Session *session) {
+        Session *iter;
+        unsigned int pos = session->pos;
+
+        session->pos = 0;
+
+        if (!pos)
+                return;
+
+        if (pos < s->position_count && s->positions[pos] == session) {
+                s->positions[pos] = NULL;
+
+                /* There might be another session claiming the same
+                 * position (eg., during gdm->session transition), so lets look
+                 * for it and set it on the free slot. */
+                LIST_FOREACH(sessions_by_seat, iter, s->sessions) {
+                        if (iter->pos == pos) {
+                                s->positions[pos] = iter;
+                                break;
+                        }
+                }
+        }
+}
+
+void seat_claim_position(Seat *s, Session *session, unsigned int pos) {
+        /* with VTs, the position is always the same as the VTnr */
+        if (seat_has_vts(s))
+                pos = session->vtnr;
+
+        if (!GREEDY_REALLOC0(s->positions, s->position_count, pos + 1))
+                return;
+
+        seat_evict_position(s, session);
+
+        session->pos = pos;
+        if (pos > 0 && !s->positions[pos])
+                s->positions[pos] = session;
+}
+
+static void seat_assign_position(Seat *s, Session *session) {
+        unsigned int pos;
+
+        if (session->pos > 0)
+                return;
+
+        for (pos = 1; pos < s->position_count; ++pos)
+                if (!s->positions[pos])
+                        break;
+
+        seat_claim_position(s, session, pos);
+}
+
 int seat_attach_session(Seat *s, Session *session) {
         assert(s);
         assert(session);
         assert(!session->seat);
 
+        if (!seat_has_vts(s) != !session->vtnr)
+                return -EINVAL;
+
         session->seat = s;
-        LIST_PREPEND(Session, sessions_by_seat, s->sessions, session);
+        LIST_PREPEND(sessions_by_seat, s->sessions, session);
+        seat_assign_position(s, session);
 
-        seat_send_changed(s, "Sessions\0");
+        seat_send_changed(s, "Sessions", NULL);
 
-        /* Note that even if a seat is not multi-session capable it
-         * still might have multiple sessions on it since old, dead
-         * sessions might continue to be tracked until all their
-         * processes are gone. The most recently added session
-         * (i.e. the first in s->sessions) is the one that matters. */
-
-        if (!seat_can_multi_session(s))
+        /* On seats with VTs, the VT logic defines which session is active. On
+         * seats without VTs, we automatically activate new sessions. */
+        if (!seat_has_vts(s))
                 seat_set_active(s, session);
 
         return 0;
 }
 
-bool seat_is_vtconsole(Seat *s) {
+void seat_complete_switch(Seat *s) {
+        Session *session;
+
         assert(s);
 
-        return s->manager->vtconsole == s;
+        /* if no session-switch is pending or if it got canceled, do nothing */
+        if (!s->pending_switch)
+                return;
+
+        session = s->pending_switch;
+        s->pending_switch = NULL;
+
+        seat_set_active(s, session);
+}
+
+bool seat_has_vts(Seat *s) {
+        assert(s);
+
+        return seat_is_seat0(s) && s->manager->console_active_fd >= 0;
+}
+
+bool seat_is_seat0(Seat *s) {
+        assert(s);
+
+        return s->manager->seat0 == s;
 }
 
 bool seat_can_multi_session(Seat *s) {
         assert(s);
 
-        if (!seat_is_vtconsole(s))
-                return false;
-
-        /* If we can't watch which VT is in the foreground, we don't
-         * support VT switching */
-
-        return s->manager->console_active_fd >= 0;
+        return seat_has_vts(s);
 }
 
 bool seat_can_tty(Seat *s) {
         assert(s);
 
-        return seat_is_vtconsole(s);
+        return seat_has_vts(s);
+}
+
+bool seat_has_master_device(Seat *s) {
+        assert(s);
+
+        /* device list is ordered by "master" flag */
+        return !!s->devices && s->devices->master;
 }
 
 bool seat_can_graphical(Seat *s) {
         assert(s);
 
-        return !!s->devices;
+        return seat_has_master_device(s);
 }
 
 int seat_get_idle_hint(Seat *s, dual_timestamp *t) {
@@ -490,16 +635,16 @@ int seat_get_idle_hint(Seat *s, dual_timestamp *t) {
         return idle_hint;
 }
 
-int seat_check_gc(Seat *s, bool drop_not_started) {
+bool seat_check_gc(Seat *s, bool drop_not_started) {
         assert(s);
 
         if (drop_not_started && !s->started)
-                return 0;
+                return false;
 
-        if (seat_is_vtconsole(s))
-                return 1;
+        if (seat_is_seat0(s))
+                return true;
 
-        return !!s->devices;
+        return seat_has_master_device(s);
 }
 
 void seat_add_to_gc_queue(Seat *s) {
@@ -508,7 +653,7 @@ void seat_add_to_gc_queue(Seat *s) {
         if (s->in_gc_queue)
                 return;
 
-        LIST_PREPEND(Seat, gc_queue, s->manager->seat_gc_queue, s);
+        LIST_PREPEND(gc_queue, s->manager->seat_gc_queue, s);
         s->in_gc_queue = true;
 }
 

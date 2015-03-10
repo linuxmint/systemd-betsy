@@ -27,203 +27,317 @@
 #include "unit-name.h"
 #include "unit-printf.h"
 #include "macro.h"
+#include "cgroup-util.h"
+#include "special.h"
 
-static char *specifier_prefix_and_instance(char specifier, void *data, void *userdata) {
+static int specifier_prefix_and_instance(char specifier, void *data, void *userdata, char **ret) {
         Unit *u = userdata;
+        char *n;
+
         assert(u);
 
-        return unit_name_to_prefix_and_instance(u->id);
+        n = unit_name_to_prefix_and_instance(u->id);
+        if (!n)
+                return -ENOMEM;
+
+        *ret = n;
+        return 0;
 }
 
-static char *specifier_prefix(char specifier, void *data, void *userdata) {
+static int specifier_prefix(char specifier, void *data, void *userdata, char **ret) {
         Unit *u = userdata;
+        char *n;
+
         assert(u);
 
-        return unit_name_to_prefix(u->id);
+        n = unit_name_to_prefix(u->id);
+        if (!n)
+                return -ENOMEM;
+
+        *ret = n;
+        return 0;
 }
 
-static char *specifier_prefix_unescaped(char specifier, void *data, void *userdata) {
+static int specifier_prefix_unescaped(char specifier, void *data, void *userdata, char **ret) {
         Unit *u = userdata;
-        char *p, *r;
+        _cleanup_free_ char *p = NULL;
+        char *n;
 
         assert(u);
 
         p = unit_name_to_prefix(u->id);
         if (!p)
-                return NULL;
+                return -ENOMEM;
 
-        r = unit_name_unescape(p);
-        free(p);
+        n = unit_name_unescape(p);
+        if (!n)
+                return -ENOMEM;
 
-        return r;
+        *ret = n;
+        return 0;
 }
 
-static char *specifier_instance_unescaped(char specifier, void *data, void *userdata) {
+static int specifier_instance_unescaped(char specifier, void *data, void *userdata, char **ret) {
         Unit *u = userdata;
+        char *n;
+
+        assert(u);
+
+        if (!u->instance)
+                return -ENOTSUP;
+
+        n = unit_name_unescape(u->instance);
+        if (!n)
+                return -ENOMEM;
+
+        *ret = n;
+        return 0;
+}
+
+static int specifier_filename(char specifier, void *data, void *userdata, char **ret) {
+        Unit *u = userdata;
+        char *n;
+
         assert(u);
 
         if (u->instance)
-                return unit_name_unescape(u->instance);
-
-        return strdup("");
-}
-
-static char *specifier_filename(char specifier, void *data, void *userdata) {
-        Unit *u = userdata;
-        assert(u);
-
-        if (u->instance)
-                return unit_name_path_unescape(u->instance);
-
-        return unit_name_to_path(u->id);
-}
-
-static char *specifier_cgroup(char specifier, void *data, void *userdata) {
-        Unit *u = userdata;
-        assert(u);
-
-        return unit_default_cgroup_path(u);
-}
-
-static char *specifier_cgroup_root(char specifier, void *data, void *userdata) {
-        Unit *u = userdata;
-        char *p;
-        assert(u);
-
-        if (specifier == 'r')
-                return strdup(u->manager->cgroup_hierarchy);
-
-        if (path_get_parent(u->manager->cgroup_hierarchy, &p) < 0)
-                return strdup("");
-
-        if (streq(p, "/")) {
-                free(p);
-                return strdup("");
-        }
-
-        return p;
-}
-
-static char *specifier_runtime(char specifier, void *data, void *userdata) {
-        Unit *u = userdata;
-        assert(u);
-
-        if (u->manager->running_as == SYSTEMD_USER) {
-                const char *e;
-
-                e = getenv("XDG_RUNTIME_DIR");
-                if (e)
-                        return strdup(e);
-        }
-
-        return strdup("/run");
-}
-
-static char *specifier_user_name(char specifier, void *data, void *userdata) {
-        Unit *u = userdata;
-        ExecContext *c;
-        int r;
-        const char *username;
-        _cleanup_free_ char *tmp = NULL;
-        uid_t uid;
-        char *printed = NULL;
-
-        assert(u);
-
-        c = unit_get_exec_context(u);
-
-        if (c && c->user)
-                username = c->user;
+                n = unit_name_path_unescape(u->instance);
         else
-                /* get USER env from env or our own uid */
-                username = tmp = getusername_malloc();
+                n = unit_name_to_path(u->id);
+        if (!n)
+                return -ENOMEM;
 
-        /* fish username from passwd */
-        r = get_user_creds(&username, &uid, NULL, NULL, NULL);
-        if (r < 0)
-                return NULL;
-
-        switch (specifier) {
-                case 'U':
-                        if (asprintf(&printed, "%d", uid) < 0)
-                                return NULL;
-                        break;
-                case 'u':
-                        printed = strdup(username);
-                        break;
-        }
-
-        return printed;
+        *ret = n;
+        return 0;
 }
 
-static char *specifier_user_home(char specifier, void *data, void *userdata) {
+static int specifier_cgroup(char specifier, void *data, void *userdata, char **ret) {
         Unit *u = userdata;
-        ExecContext *c;
-        int r;
-        const char *username, *home;
+        char *n;
 
         assert(u);
 
-        c = unit_get_exec_context(u);
+        if (u->cgroup_path)
+                n = strdup(u->cgroup_path);
+        else
+                n = unit_default_cgroup_path(u);
+        if (!n)
+                return -ENOMEM;
 
-        /* return HOME if set, otherwise from passwd */
-        if (!c || !c->user) {
-                char *h;
+        *ret = n;
+        return 0;
+}
 
-                r = get_home_dir(&h);
+static int specifier_cgroup_root(char specifier, void *data, void *userdata, char **ret) {
+        Unit *u = userdata;
+        const char *slice;
+        char *n;
+        int r;
+
+        assert(u);
+
+        slice = unit_slice_name(u);
+        if (specifier == 'R' || !slice)
+                n = strdup(u->manager->cgroup_root);
+        else {
+                _cleanup_free_ char *p = NULL;
+
+                r = cg_slice_to_path(slice, &p);
                 if (r < 0)
-                        return NULL;
+                        return r;
 
-                return h;
+                n = strjoin(u->manager->cgroup_root, "/", p, NULL);
+                if (!n)
+                        return -ENOMEM;
         }
 
-        username = c->user;
-        r = get_user_creds(&username, NULL, NULL, &home, NULL);
-        if (r < 0)
-               return NULL;
-
-        return strdup(home);
+        *ret = n;
+        return 0;
 }
 
-static char *specifier_user_shell(char specifier, void *data, void *userdata) {
+static int specifier_runtime(char specifier, void *data, void *userdata, char **ret) {
+        Unit *u = userdata;
+        const char *e;
+        char *n = NULL;
+
+        assert(u);
+
+        if (u->manager->running_as == SYSTEMD_SYSTEM)
+                e = "/run";
+        else {
+                e = getenv("XDG_RUNTIME_DIR");
+                if (!e)
+                        return -ENOTSUP;
+        }
+
+        n = strdup(e);
+        if (!n)
+                return -ENOMEM;
+
+        *ret = n;
+        return 0;
+}
+
+static int specifier_user_name(char specifier, void *data, void *userdata, char **ret) {
+        char *printed = NULL;
         Unit *u = userdata;
         ExecContext *c;
         int r;
-        const char *username, *shell;
-        char *ret;
 
         assert(u);
 
         c = unit_get_exec_context(u);
+        if (!c)
+                return -ENOTSUP;
 
-        if (c && c->user)
-                username = c->user;
-        else
-                username = "root";
+        if (u->manager->running_as == SYSTEMD_SYSTEM) {
 
-        /* return /bin/sh for root, otherwise the value from passwd */
-        r = get_user_creds(&username, NULL, NULL, NULL, &shell);
-        if (r < 0) {
-                log_warning_unit(u->id,
-                                 "Failed to determine shell: %s",
-                                 strerror(-r));
-                return NULL;
+                /* We cannot use NSS from PID 1, hence try to make the
+                 * best of it in that case, and fail if we can't help
+                 * it */
+
+                if (!c->user || streq(c->user, "root") || streq(c->user, "0"))
+                        printed = strdup(specifier == 'u' ? "root" : "0");
+                else {
+                        if (specifier == 'u')
+                                printed = strdup(c->user);
+                        else {
+                                uid_t uid;
+
+                                r = parse_uid(c->user, &uid);
+                                if (r < 0)
+                                        return -ENODATA;
+
+                                asprintf(&printed, UID_FMT, uid);
+                        }
+                }
+
+        } else {
+                _cleanup_free_ char *tmp = NULL;
+                const char *username = NULL;
+                uid_t uid;
+
+                if (c->user)
+                        username = c->user;
+                else
+                        /* get USER env from env or our own uid */
+                        username = tmp = getusername_malloc();
+
+                /* fish username from passwd */
+                r = get_user_creds(&username, &uid, NULL, NULL, NULL);
+                if (r < 0)
+                        return r;
+
+                if (specifier == 'u')
+                        printed = strdup(username);
+                else
+                        asprintf(&printed, UID_FMT, uid);
         }
 
-        if (!path_is_absolute(shell)) {
-                log_warning_unit(u->id,
-                                 "Shell %s is not absolute, ignoring.",
-                                 shell);
-        }
+        if (!printed)
+                return -ENOMEM;
 
-        ret = strdup(shell);
-        if (!ret)
-                log_oom();
-
-        return ret;
+        *ret = printed;
+        return 0;
 }
 
-char *unit_name_printf(Unit *u, const char* format) {
+static int specifier_user_home(char specifier, void *data, void *userdata, char **ret) {
+        Unit *u = userdata;
+        ExecContext *c;
+        char *n;
+        int r;
+
+        assert(u);
+
+        c = unit_get_exec_context(u);
+        if (!c)
+                return -ENOTSUP;
+
+        if (u->manager->running_as == SYSTEMD_SYSTEM) {
+
+                /* We cannot use NSS from PID 1, hence try to make the
+                 * best of it if we can, but fail if we can't */
+
+                if (!c->user || streq(c->user, "root") || streq(c->user, "0"))
+                        n = strdup("/root");
+                else
+                        return -ENOTSUP;
+
+        } else {
+
+                /* return HOME if set, otherwise from passwd */
+                if (!c || !c->user) {
+                        r = get_home_dir(&n);
+                        if (r < 0)
+                                return r;
+                } else {
+                        const char *username, *home;
+
+                        username = c->user;
+                        r = get_user_creds(&username, NULL, NULL, &home, NULL);
+                        if (r < 0)
+                                return r;
+
+                        n = strdup(home);
+                }
+        }
+
+        if (!n)
+                return -ENOMEM;
+
+        *ret = n;
+        return 0;
+}
+
+static int specifier_user_shell(char specifier, void *data, void *userdata, char **ret) {
+        Unit *u = userdata;
+        ExecContext *c;
+        char *n;
+        int r;
+
+        assert(u);
+
+        c = unit_get_exec_context(u);
+        if (!c)
+                return -ENOTSUP;
+
+        if (u->manager->running_as == SYSTEMD_SYSTEM) {
+
+                /* We cannot use NSS from PID 1, hence try to make the
+                 * best of it if we can, but fail if we can't */
+
+                if (!c->user || streq(c->user, "root") || streq(c->user, "0"))
+                        n = strdup("/bin/sh");
+                else
+                        return -ENOTSUP;
+
+        } else {
+
+                /* return /bin/sh for root, otherwise the value from passwd */
+                if (!c->user) {
+                        r = get_shell(&n);
+                        if (r < 0)
+                                return r;
+                } else {
+                        const char *username, *shell;
+
+                        username = c->user;
+                        r = get_user_creds(&username, NULL, NULL, NULL, &shell);
+                        if (r < 0)
+                                return r;
+
+                        n = strdup(shell);
+                }
+        }
+
+        if (!n)
+                return -ENOMEM;
+
+        *ret = n;
+        return 0;
+}
+
+int unit_name_printf(Unit *u, const char* format, char **ret) {
 
         /*
          * This will use the passed string as format string and
@@ -245,19 +359,20 @@ char *unit_name_printf(Unit *u, const char* format) {
 
         assert(u);
         assert(format);
+        assert(ret);
 
-        return specifier_printf(format, table, u);
+        return specifier_printf(format, table, u, ret);
 }
 
-char *unit_full_printf(Unit *u, const char *format) {
+int unit_full_printf(Unit *u, const char *format, char **ret) {
 
         /* This is similar to unit_name_printf() but also supports
          * unescaping. Also, adds a couple of additional codes:
          *
-         * %f the the instance if set, otherwise the id
+         * %f the instance if set, otherwise the id
          * %c cgroup path of unit
-         * %r root cgroup path of this systemd instance (e.g. "/user/lennart/shared/systemd-4711")
-         * %R parent of root cgroup path (e.g. "/usr/lennart/shared")
+         * %r where units in this slice are placed in the cgroup tree
+         * %R the root of this systemd's instance tree
          * %t the runtime directory to place sockets in (e.g. "/run" or $XDG_RUNTIME_DIR)
          * %U the UID of the configured user or running user
          * %u the username of the configured user or running user
@@ -266,6 +381,7 @@ char *unit_full_printf(Unit *u, const char *format) {
          * %m the machine ID of the running system
          * %H the host name of the running system
          * %b the boot ID of the running system
+         * %v `uname -r` of the running system
          */
 
         const Specifier table[] = {
@@ -289,17 +405,21 @@ char *unit_full_printf(Unit *u, const char *format) {
                 { 'm', specifier_machine_id,          NULL },
                 { 'H', specifier_host_name,           NULL },
                 { 'b', specifier_boot_id,             NULL },
-                { 0, NULL, NULL }
+                { 'v', specifier_kernel_release,      NULL },
+                {}
         };
 
+        assert(u);
         assert(format);
+        assert(ret);
 
-        return specifier_printf(format, table, u);
+        return specifier_printf(format, table, u, ret);
 }
 
-char **unit_full_printf_strv(Unit *u, char **l) {
+int unit_full_printf_strv(Unit *u, char **l, char ***ret) {
         size_t n;
         char **r, **i, **j;
+        int q;
 
         /* Applies unit_full_printf to every entry in l */
 
@@ -308,22 +428,22 @@ char **unit_full_printf_strv(Unit *u, char **l) {
         n = strv_length(l);
         r = new(char*, n+1);
         if (!r)
-                return NULL;
+                return -ENOMEM;
 
         for (i = l, j = r; *i; i++, j++) {
-                *j = unit_full_printf(u, *i);
-                if (!*j)
+                q = unit_full_printf(u, *i, j);
+                if (q < 0)
                         goto fail;
         }
 
         *j = NULL;
-        return r;
+        *ret = r;
+        return 0;
 
 fail:
         for (j--; j >= r; j--)
                 free(*j);
 
         free(r);
-
-        return NULL;
+        return q;
 }

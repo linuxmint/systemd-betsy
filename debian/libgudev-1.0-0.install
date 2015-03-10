@@ -1,1 +1,1 @@
-lib/*/libgudev*.so.*
+usr/lib/*/libgudev*.so.*

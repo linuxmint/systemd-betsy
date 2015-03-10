@@ -256,6 +256,11 @@ static int trie_search_f(struct udev_hwdb *hwdb, const char *search) {
         return 0;
 }
 
+static const char hwdb_bin_paths[] =
+    "/etc/udev/hwdb.bin\0"
+    UDEVLIBEXECDIR "/hwdb.bin\0";
+
+
 /**
  * udev_hwdb_new:
  * @udev: udev library context
@@ -266,6 +271,7 @@ static int trie_search_f(struct udev_hwdb *hwdb, const char *search) {
  **/
 _public_ struct udev_hwdb *udev_hwdb_new(struct udev *udev) {
         struct udev_hwdb *hwdb;
+        const char *hwdb_bin_path;
         const char sig[] = HWDB_SIG;
 
         hwdb = new0(struct udev_hwdb, 1);
@@ -275,40 +281,53 @@ _public_ struct udev_hwdb *udev_hwdb_new(struct udev *udev) {
         hwdb->refcount = 1;
         udev_list_init(udev, &hwdb->properties_list, true);
 
-        hwdb->f = fopen(UDEVLIBEXECDIR "/hwdb.bin", "re");
+        /* find hwdb.bin in hwdb_bin_paths */
+        NULSTR_FOREACH(hwdb_bin_path, hwdb_bin_paths) {
+                hwdb->f = fopen(hwdb_bin_path, "re");
+                if (hwdb->f)
+                        break;
+                else if (errno == ENOENT)
+                        continue;
+                else {
+                        udev_dbg(udev, "error reading %s: %m", hwdb_bin_path);
+                        udev_hwdb_unref(hwdb);
+                        return NULL;
+                }
+        }
+
         if (!hwdb->f) {
-                log_debug("error reading " UDEVLIBEXECDIR "/hwdb.bin: %m");
+                udev_err(udev, "hwdb.bin does not exist, please run udevadm hwdb --update");
                 udev_hwdb_unref(hwdb);
                 return NULL;
         }
 
         if (fstat(fileno(hwdb->f), &hwdb->st) < 0 ||
             (size_t)hwdb->st.st_size < offsetof(struct trie_header_f, strings_len) + 8) {
-                log_debug("error reading " UDEVLIBEXECDIR "/hwdb.bin: %m");
+                udev_dbg(udev, "error reading %s: %m", hwdb_bin_path);
                 udev_hwdb_unref(hwdb);
                 return NULL;
         }
 
         hwdb->map = mmap(0, hwdb->st.st_size, PROT_READ, MAP_SHARED, fileno(hwdb->f), 0);
         if (hwdb->map == MAP_FAILED) {
-                log_debug("error mapping " UDEVLIBEXECDIR "/hwdb.bin: %m");
+                udev_dbg(udev, "error mapping %s: %m", hwdb_bin_path);
                 udev_hwdb_unref(hwdb);
                 return NULL;
         }
 
         if (memcmp(hwdb->map, sig, sizeof(hwdb->head->signature)) != 0 ||
             (size_t)hwdb->st.st_size != le64toh(hwdb->head->file_size)) {
-                log_debug("error recognizing the format of " UDEVLIBEXECDIR "/hwdb.bin");
+                udev_dbg(udev, "error recognizing the format of %s", hwdb_bin_path);
                 udev_hwdb_unref(hwdb);
                 return NULL;
         }
 
-        log_debug("=== trie on-disk ===\n");
-        log_debug("tool version:          %"PRIu64, le64toh(hwdb->head->tool_version));
-        log_debug("file size:        %8llu bytes\n", (unsigned long long) hwdb->st.st_size);
-        log_debug("header size       %8"PRIu64" bytes\n", le64toh(hwdb->head->header_size));
-        log_debug("strings           %8"PRIu64" bytes\n", le64toh(hwdb->head->strings_len));
-        log_debug("nodes             %8"PRIu64" bytes\n", le64toh(hwdb->head->nodes_len));
+        udev_dbg(udev, "=== trie on-disk ===\n");
+        udev_dbg(udev, "tool version:          %"PRIu64, le64toh(hwdb->head->tool_version));
+        udev_dbg(udev, "file size:        %8zu bytes\n", hwdb->st.st_size);
+        udev_dbg(udev, "header size       %8"PRIu64" bytes\n", le64toh(hwdb->head->header_size));
+        udev_dbg(udev, "strings           %8"PRIu64" bytes\n", le64toh(hwdb->head->strings_len));
+        udev_dbg(udev, "nodes             %8"PRIu64" bytes\n", le64toh(hwdb->head->nodes_len));
         return hwdb;
 }
 
@@ -334,14 +353,14 @@ _public_ struct udev_hwdb *udev_hwdb_ref(struct udev_hwdb *hwdb) {
  * Drop a reference of a hwdb context. If the refcount reaches zero,
  * all resources of the hwdb context will be released.
  *
- * Returns: the passed hwdb context if it has still an active reference, or #NULL otherwise.
+ * Returns: #NULL
  **/
 _public_ struct udev_hwdb *udev_hwdb_unref(struct udev_hwdb *hwdb) {
         if (!hwdb)
                 return NULL;
         hwdb->refcount--;
         if (hwdb->refcount > 0)
-                return hwdb;
+                return NULL;
         if (hwdb->map)
                 munmap((void *)hwdb->map, hwdb->st.st_size);
         if (hwdb->f)
@@ -352,14 +371,25 @@ _public_ struct udev_hwdb *udev_hwdb_unref(struct udev_hwdb *hwdb) {
 }
 
 bool udev_hwdb_validate(struct udev_hwdb *hwdb) {
+        bool found = false;
+        const char* p;
         struct stat st;
 
         if (!hwdb)
                 return false;
         if (!hwdb->f)
                 return false;
-        if (fstat(fileno(hwdb->f), &st) < 0)
+
+        /* if hwdb.bin doesn't exist anywhere, we need to update */
+        NULSTR_FOREACH(p, hwdb_bin_paths) {
+                if (stat(p, &st) >= 0) {
+                        found = true;
+                        break;
+                }
+        }
+        if (!found)
                 return true;
+
         if (timespec_load(&hwdb->st.st_mtim) != timespec_load(&st.st_mtim))
                 return true;
         return false;

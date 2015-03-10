@@ -54,17 +54,17 @@
 
                         <funcprototype>
                                 <funcdef>int <function>sd_journal_get_cutoff_realtime_usec</function></funcdef>
-                                <paramdef>sd_journal* <parameter>j</parameter></paramdef>
-                                <paramdef>uint64_t* <parameter>from</parameter></paramdef>
-                                <paramdef>uint64_t* <parameter>to</parameter></paramdef>
+                                <paramdef>sd_journal *<parameter>j</parameter></paramdef>
+                                <paramdef>uint64_t *<parameter>from</parameter></paramdef>
+                                <paramdef>uint64_t *<parameter>to</parameter></paramdef>
                         </funcprototype>
 
                         <funcprototype>
                                 <funcdef>int <function>sd_journal_get_cutoff_monotonic_usec</function></funcdef>
-                                <paramdef>sd_journal* <parameter>j</parameter></paramdef>
+                                <paramdef>sd_journal *<parameter>j</parameter></paramdef>
                                 <paramdef>sd_id128_t <parameter>boot_id</parameter></paramdef>
-                                <paramdef>uint64_t* <parameter>from</parameter></paramdef>
-                                <paramdef>uint64_t* <parameter>to</parameter></paramdef>
+                                <paramdef>uint64_t *<parameter>from</parameter></paramdef>
+                                <paramdef>uint64_t *<parameter>to</parameter></paramdef>
                         </funcprototype>
 
                 </funcsynopsis>
@@ -74,23 +74,30 @@
                 <title>Description</title>
 
                 <para><function>sd_journal_get_cutoff_realtime_usec()</function>
-                gets the realtime (wallclock) timestamps of the first
-                and last entries accessible in the journal.  It takes
-                three arguments: the journal context object and two
-                pointers to 64 Bit unsigned integers to store the
-                timestamps in. The timestamps are in microseconds
-                since the epoch, i.e. CLOCK_REALTIME. Either one of
-                the two timestamp arguments may be passed as NULL in
-                case the timestamp is not needed, but not both.</para>
+                retrieves the realtime (wallclock) timestamps of the
+                first and last entries accessible in the journal.  It
+                takes three arguments: the journal context object
+                <parameter>j</parameter> and two pointers
+                <parameter>from</parameter> and
+                <parameter>to</parameter> pointing at 64-bit unsigned
+                integers to store the timestamps in. The timestamps
+                are in microseconds since the epoch,
+                i.e. <constant>CLOCK_REALTIME</constant>. Either one
+                of the two timestamp arguments may be passed as
+                <constant>NULL</constant> in case the timestamp is not
+                needed, but not both.</para>
 
                 <para><function>sd_journal_get_cutoff_monotonic_usec()</function>
-                gets the monotonic timestamps of the first and last
-                entries accessible in the journal. It takes three
-                arguments: the journal context object, a 128 Bit
-                identifier for the boot, and two pointers to 64 Bit
-                unsigned integers to store the timestamps. The
-                timestamps are in microseconds since boot-up of the
-                specific boot, i.e. CLOCK_MONOTONIC. Since the
+                retrieves the monotonic timestamps of the first and
+                last entries accessible in the journal. It takes three
+                arguments: the journal context object
+                <parameter>j</parameter>, a 128-bit identifier for the
+                boot <parameter>boot_id</parameter>, and two pointers
+                to 64-bit unsigned integers to store the timestamps,
+                <parameter>from</parameter> and
+                <parameter>to</parameter>. The timestamps are in
+                microseconds since boot-up of the specific boot,
+                i.e. <constant>CLOCK_MONOTONIC</constant>. Since the
                 monotonic clock begins new with every reboot it only
                 defines a well-defined point in time when used
                 together with an identifier identifying the boot, see
@@ -98,8 +105,8 @@
                 for more information. The function will return the
                 timestamps for the boot identified by the passed boot
                 ID. Either one of the two timestamp arguments may be
-                passed as NULL in case the timestamp is not needed,
-                but not both.</para>
+                passed as <constant>NULL</constant> in case the
+                timestamp is not needed, but not both.</para>
         </refsect1>
 
         <refsect1>
@@ -110,6 +117,12 @@
                 <function>sd_journal_get_cutoff_monotonic_usec()</function>
                 return 1 on success, 0 if not suitable entries are in
                 the journal or a negative errno-style error code.</para>
+
+                <para>Locations pointed to by parameters
+                <parameter>from</parameter> and
+                <parameter>to</parameter> will be set only if the
+                return value is positive, and obviously, the
+                parameters are non-null.</para>
         </refsect1>
 
         <refsect1>
@@ -119,10 +132,9 @@
                 <function>sd_journal_get_cutoff_realtime_usec()</function>
                 and
                 <function>sd_journal_get_cutoff_monotonic_usec()</function>
-                interfaces are available as shared library, which can
+                interfaces are available as a shared library, which can
                 be compiled and linked to with the
-                <literal>libsystemd-journal</literal>
-                <citerefentry><refentrytitle>pkg-config</refentrytitle><manvolnum>1</manvolnum></citerefentry>
+                <constant>libsystemd</constant> <citerefentry><refentrytitle>pkg-config</refentrytitle><manvolnum>1</manvolnum></citerefentry>
                 file.</para>
         </refsect1>
 

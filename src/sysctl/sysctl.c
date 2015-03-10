@@ -30,11 +30,11 @@
 #include "log.h"
 #include "strv.h"
 #include "util.h"
-#include "strv.h"
 #include "hashmap.h"
 #include "path-util.h"
 #include "conf-files.h"
 #include "fileio.h"
+#include "build.h"
 
 static char **arg_prefixes = NULL;
 
@@ -48,12 +48,26 @@ static const char conf_file_dirs[] =
 #endif
         ;
 
-static char *normalize_sysctl(char *s) {
+static char* normalize_sysctl(char *s) {
         char *n;
 
-        for (n = s; *n; n++)
+        n = strpbrk(s, "/.");
+        /* If the first separator is a slash, the path is
+         * assumed to be normalized and slashes remain slashes
+         * and dots remains dots. */
+        if (!n || *n == '/')
+                return s;
+
+        /* Otherwise, dots become slashes and slashes become
+         * dots. Fun. */
+        while (n) {
                 if (*n == '.')
                         *n = '/';
+                else
+                        *n = '.';
+
+                n = strpbrk(n + 1, "/.");
+        }
 
         return s;
 }
@@ -65,7 +79,7 @@ static int apply_sysctl(const char *property, const char *value) {
 
         log_debug("Setting '%s' to '%s'", property, value);
 
-        p = new(char, sizeof("/proc/sys/") + strlen(property));
+        p = new(char, strlen("/proc/sys/") + strlen(property) + 1);
         if (!p)
                 return log_oom();
 
@@ -123,7 +137,7 @@ static int parse_file(Hashmap *sysctl_options, const char *path, bool ignore_eno
 
         assert(path);
 
-        r = search_and_fopen_nulstr(path, "re", conf_file_dirs, &f);
+        r = search_and_fopen_nulstr(path, "re", NULL, conf_file_dirs, &f);
         if (r < 0) {
                 if (ignore_enoent && r == -ENOENT)
                         return 0;
@@ -132,9 +146,10 @@ static int parse_file(Hashmap *sysctl_options, const char *path, bool ignore_eno
                 return r;
         }
 
-        log_debug("parse: %s\n", path);
+        log_debug("parse: %s", path);
         while (!feof(f)) {
                 char l[LINE_MAX], *p, *value, *new_value, *property, *existing;
+                void *v;
                 int k;
 
                 if (!fgets(l, sizeof(l), f)) {
@@ -167,13 +182,14 @@ static int parse_file(Hashmap *sysctl_options, const char *path, bool ignore_eno
                 p = normalize_sysctl(strstrip(p));
                 value = strstrip(value);
 
-                existing = hashmap_get(sysctl_options, p);
+                existing = hashmap_get2(sysctl_options, p, &v);
                 if (existing) {
-                        if (!streq(value, existing))
-                                log_warning("Duplicate assignment of %s in file '%s', ignoring.",
-                                            p, path);
+                        if (streq(value, existing))
+                                continue;
 
-                        continue;
+                        log_info("Overwriting earlier assignment of %s in file '%s'.", p, path);
+                        free(hashmap_remove(sysctl_options, p));
+                        free(v);
                 }
 
                 property = strdup(p);
@@ -188,7 +204,7 @@ static int parse_file(Hashmap *sysctl_options, const char *path, bool ignore_eno
 
                 k = hashmap_put(sysctl_options, property, new_value);
                 if (k < 0) {
-                        log_error("Failed to add sysctl variable %s to hashmap: %s", property, strerror(-r));
+                        log_error("Failed to add sysctl variable %s to hashmap: %s", property, strerror(-k));
                         free(property);
                         free(new_value);
                         return k;
@@ -203,6 +219,7 @@ static int help(void) {
         printf("%s [OPTIONS...] [CONFIGURATION FILE...]\n\n"
                "Applies kernel sysctl settings.\n\n"
                "  -h --help             Show this help\n"
+               "     --version          Show package version\n"
                "     --prefix=PATH      Only apply rules that apply to paths with the specified prefix\n",
                program_invocation_short_name);
 
@@ -212,13 +229,15 @@ static int help(void) {
 static int parse_argv(int argc, char *argv[]) {
 
         enum {
+                ARG_VERSION = 0x100,
                 ARG_PREFIX
         };
 
         static const struct option options[] = {
                 { "help",      no_argument,       NULL, 'h'           },
+                { "version",   no_argument,       NULL, ARG_VERSION   },
                 { "prefix",    required_argument, NULL, ARG_PREFIX    },
-                { NULL,        0,                 NULL, 0             }
+                {}
         };
 
         int c;
@@ -231,23 +250,22 @@ static int parse_argv(int argc, char *argv[]) {
                 switch (c) {
 
                 case 'h':
-                        help();
+                        return help();
+
+                case ARG_VERSION:
+                        puts(PACKAGE_STRING);
+                        puts(SYSTEMD_FEATURES);
                         return 0;
 
                 case ARG_PREFIX: {
                         char *p;
-                        char **l;
 
                         for (p = optarg; *p; p++)
                                 if (*p == '.')
                                         *p = '/';
 
-                        l = strv_append(arg_prefixes, optarg);
-                        if (!l)
+                        if (strv_extend(&arg_prefixes, optarg) < 0)
                                 return log_oom();
-
-                        strv_free(arg_prefixes);
-                        arg_prefixes = l;
 
                         break;
                 }
@@ -256,8 +274,7 @@ static int parse_argv(int argc, char *argv[]) {
                         return -EINVAL;
 
                 default:
-                        log_error("Unknown option code %c", c);
-                        return -EINVAL;
+                        assert_not_reached("Unhandled option");
                 }
         }
 
@@ -303,8 +320,6 @@ int main(int argc, char *argv[]) {
                         log_error("Failed to enumerate sysctl.d files: %s", strerror(-r));
                         goto finish;
                 }
-
-                r = parse_file(sysctl_options, "/etc/sysctl.conf", true);
 
                 STRV_FOREACH(f, files) {
                         k = parse_file(sysctl_options, *f, true);

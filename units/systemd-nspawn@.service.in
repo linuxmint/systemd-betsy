@@ -10,9 +10,11 @@ Description=Container %i
 Documentation=man:systemd-nspawn(1)
 
 [Service]
-ExecStart=@bindir@/systemd-nspawn -bjD /var/lib/container/%i
-ControlGroup=%R/machine/%i.nspawn cpu:/
+ExecStart=@bindir@/systemd-nspawn --quiet --keep-unit --boot --link-journal=try-guest --directory=/var/lib/container/%i
+KillMode=mixed
 Type=notify
+RestartForceExitStatus=133
+SuccessExitStatus=133
 
 [Install]
-Also=multi-user.target
+WantedBy=multi-user.target

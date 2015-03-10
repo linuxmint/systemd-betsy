@@ -231,6 +231,32 @@ static void test_hashmap_put(void) {
         hashmap_free(m);
 }
 
+static void test_hashmap_remove_and_put(void) {
+        _cleanup_hashmap_free_ Hashmap *m = NULL;
+        int valid;
+        char *r;
+
+        m = hashmap_new(string_hash_func, string_compare_func);
+        assert_se(m);
+
+        valid = hashmap_remove_and_put(m, "unvalid key", "new key", NULL);
+        assert_se(valid < 0);
+
+        valid = hashmap_put(m, "key 1", (void*) (const char *) "val 1");
+        assert_se(valid == 1);
+        valid = hashmap_remove_and_put(m, "key 1", "key 2", (void*) (const char *) "val 2");
+        assert_se(valid == 0);
+
+        r = hashmap_get(m, "key 2");
+        assert_se(streq(r, "val 2"));
+        assert_se(!hashmap_get(m, "key 1"));
+
+        valid = hashmap_put(m, "key 3", (void*) (const char *) "val 3");
+        assert_se(valid == 1);
+        valid = hashmap_remove_and_put(m, "key 3", "key 2", (void*) (const char *) "val 2");
+        assert_se(valid < 0);
+}
+
 static void test_hashmap_ensure_allocated(void) {
         Hashmap *m;
         int valid_hashmap;
@@ -467,10 +493,93 @@ static void test_hashmap_get(void) {
         hashmap_free_free(m);
 }
 
+static void test_hashmap_many(void) {
+        Hashmap *h;
+        unsigned i;
+
+#define N_ENTRIES 100000
+
+        assert_se(h = hashmap_new(NULL, NULL));
+
+        for (i = 1; i < N_ENTRIES*3; i+=3) {
+                assert_se(hashmap_put(h, UINT_TO_PTR(i), UINT_TO_PTR(i)) >= 0);
+                assert_se(PTR_TO_UINT(hashmap_get(h, UINT_TO_PTR(i))) == i);
+        }
+
+        for (i = 1; i < N_ENTRIES*3; i++)
+                assert_se(hashmap_contains(h, UINT_TO_PTR(i)) == (i % 3 == 1));
+
+        log_info("%u <= %u * 0.75 = %g", hashmap_size(h), hashmap_buckets(h), hashmap_buckets(h) * 0.75);
+
+        assert_se(hashmap_size(h) <= hashmap_buckets(h) * 0.75);
+        assert_se(hashmap_size(h) == N_ENTRIES);
+
+        hashmap_free(h);
+}
+
+static void test_hashmap_first_key(void) {
+        _cleanup_hashmap_free_ Hashmap *m = NULL;
+
+        m = hashmap_new(string_hash_func, string_compare_func);
+        assert_se(m);
+
+        assert_se(!hashmap_first_key(m));
+        assert_se(hashmap_put(m, "key 1", NULL) == 1);
+        assert_se(streq(hashmap_first_key(m), "key 1"));
+        assert_se(hashmap_put(m, "key 2", NULL) == 1);
+        assert_se(streq(hashmap_first_key(m), "key 1"));
+        assert_se(hashmap_remove(m, "key 1") == NULL);
+        assert_se(streq(hashmap_first_key(m), "key 2"));
+}
+
+static void test_hashmap_last(void) {
+        _cleanup_hashmap_free_ Hashmap *m = NULL;
+
+        m = hashmap_new(string_hash_func, string_compare_func);
+        assert_se(m);
+
+        assert_se(!hashmap_last(m));
+        assert_se(hashmap_put(m, "key 1", (void *) (const char *) "val 1") == 1);
+        assert_se(streq(hashmap_last(m), "val 1"));
+        assert_se(hashmap_put(m, "key 2", (void *) (const char *) "bar") == 1);
+        assert_se(streq(hashmap_last(m), "bar"));
+        assert_se(hashmap_remove(m, "key 2"));
+        assert_se(streq(hashmap_last(m), "val 1"));
+}
+
+static void test_hashmap_steal_first_key(void) {
+        _cleanup_hashmap_free_ Hashmap *m = NULL;
+
+        m = hashmap_new(string_hash_func, string_compare_func);
+        assert_se(m);
+
+        assert_se(!hashmap_steal_first_key(m));
+        assert_se(hashmap_put(m, "key 1", NULL) == 1);
+        assert_se(streq(hashmap_steal_first_key(m), "key 1"));
+
+        assert_se(hashmap_isempty(m));
+}
+
+static void test_hashmap_clear_free_free(void) {
+        _cleanup_hashmap_free_ Hashmap *m = NULL;
+
+        m = hashmap_new(string_hash_func, string_compare_func);
+        assert_se(m);
+
+        assert_se(hashmap_put(m, strdup("key 1"), NULL) == 1);
+        assert_se(hashmap_put(m, strdup("key 2"), NULL) == 1);
+        assert_se(hashmap_put(m, strdup("key 3"), NULL) == 1);
+
+        hashmap_clear_free_free(m);
+        assert_se(hashmap_isempty(m));
+}
+
 static void test_uint64_compare_func(void) {
-        assert_se(uint64_compare_func("a", "a") == 0);
-        assert_se(uint64_compare_func("a", "b") == -1);
-        assert_se(uint64_compare_func("b", "a") == 1);
+        const uint64_t a = 0x100, b = 0x101;
+
+        assert_se(uint64_compare_func(&a, &a) == 0);
+        assert_se(uint64_compare_func(&a, &b) == -1);
+        assert_se(uint64_compare_func(&b, &a) == 1);
 }
 
 static void test_trivial_compare_func(void) {
@@ -484,8 +593,7 @@ static void test_string_compare_func(void) {
         assert_se(string_compare_func("fred", "fred") == 0);
 }
 
-int main(int argc, const char *argv[])
-{
+int main(int argc, const char *argv[]) {
         test_hashmap_copy();
         test_hashmap_get_strv();
         test_hashmap_move_one();
@@ -493,6 +601,7 @@ int main(int argc, const char *argv[])
         test_hashmap_replace();
         test_hashmap_update();
         test_hashmap_put();
+        test_hashmap_remove_and_put();
         test_hashmap_ensure_allocated();
         test_hashmap_foreach();
         test_hashmap_foreach_backwards();
@@ -502,6 +611,11 @@ int main(int argc, const char *argv[])
         test_hashmap_isempty();
         test_hashmap_get();
         test_hashmap_size();
+        test_hashmap_many();
+        test_hashmap_first_key();
+        test_hashmap_last();
+        test_hashmap_steal_first_key();
+        test_hashmap_clear_free_free();
         test_uint64_compare_func();
         test_trivial_compare_func();
         test_string_compare_func();

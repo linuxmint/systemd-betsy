@@ -22,13 +22,10 @@ root_over_the_network() {
 
 . /usr/share/initramfs-tools/hook-functions
 
-mkdir -p $DESTDIR/lib/systemd/
-copy_exec /lib/systemd/systemd-udevd
-if [ -x /sbin/udevadm.upgrade ]; then
-    copy_exec /bin/udevadm.upgrade /bin/udevadm
-else
-    copy_exec /bin/udevadm
-fi
+mkdir -p $DESTDIR/lib/systemd
+copy_exec /lib/systemd/systemd-udevd      /lib/systemd
+copy_exec /bin/udevadm    /bin
+
 # copy compat symlink
 cp -a /sbin/udevadm $DESTDIR/sbin/udevadm
 
@@ -36,16 +33,16 @@ mkdir -p $DESTDIR/etc/udev
 cp -p /etc/udev/udev.conf $DESTDIR/etc/udev/
 
 mkdir -p $DESTDIR/lib/udev/rules.d/
-for rules in 50-udev-default.rules 50-firmware.rules 80-drivers.rules \
-	60-persistent-storage.rules; do
+for rules in 50-firmware.rules 50-udev-default.rules 60-persistent-storage.rules \
+	80-drivers.rules \
+	64-md-raid.rules 60-persistent-storage-lvm.rules \
+	55-dm.rules 60-persistent-storage-dm.rules; do
   if   [ -e /etc/udev/rules.d/$rules ]; then
     cp -p /etc/udev/rules.d/$rules $DESTDIR/lib/udev/rules.d/
   elif [ -e /lib/udev/rules.d/$rules ]; then
     cp -p /lib/udev/rules.d/$rules $DESTDIR/lib/udev/rules.d/
   fi
 done
-copy_exec /lib/udev/ata_id /lib/udev
-copy_exec /lib/udev/scsi_id /lib/udev
 
 # try to autodetect the value of this configuration option
 if [ -z "$NEED_PERSISTENT_NET" ] && root_over_the_network; then
@@ -63,3 +60,9 @@ YES|yes|Yes|Y|y)
   fi
   ;;
 esac
+
+cp /lib/udev/hotplug.functions $DESTDIR/lib/udev/
+for program in ata_id scsi_id; do
+  copy_exec /lib/udev/$program /lib/udev
+done
+copy_exec /sbin/blkid /sbin

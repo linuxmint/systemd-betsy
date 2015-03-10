@@ -1,60 +1,67 @@
 Source: systemd
 Section: admin
-Priority: extra
-Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
-XSBC-Original-Maintainer: Tollef Fog Heen <tfheen@debian.org>
-Standards-Version: 3.9.2
-Vcs-Git: git://anonscm.debian.org/pkg-systemd/systemd.git -b debian
+Priority: optional
+Maintainer: Debian systemd Maintainers <pkg-systemd-maintainers@lists.alioth.debian.org>
+Uploaders: Michael Biebl <biebl@debian.org>, Marco d'Itri <md@linux.it>, Michael Stapelberg <stapelberg@debian.org>, Sjoerd Simons <sjoerd@debian.org>, Martin Pitt <mpitt@debian.org>
+Standards-Version: 3.9.6
+Vcs-Git: git://anonscm.debian.org/pkg-systemd/systemd.git
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=pkg-systemd/systemd.git;a=summary
 X-Python-Version: >= 2.7
-Homepage: http://www.freedesktop.org/wiki/Software/systemd
 XS-Testsuite: autopkgtest
+Homepage: http://www.freedesktop.org/wiki/Software/systemd
 Build-Depends: debhelper (>= 9),
-               libcap-dev,
                pkg-config,
-               libdbus-1-dev (>= 1.3.2~),
-               libglib2.0-dev (>= 2.22.0),
                xsltproc,
                docbook-xsl,
                docbook-xml,
                gtk-doc-tools,
                m4,
-               libpam0g-dev,
-               libaudit-dev,
                dh-autoreconf,
                automake (>= 1.11),
                autoconf (>= 2.63),
                intltool,
-               libcryptsetup-dev (>= 2:1.4.2),
-               libwrap0-dev,
+               gperf,
+               libcap-dev,
+               libpam0g-dev,
+               libaudit-dev,
+               libdbus-1-dev (>= 1.3.2),
+               libglib2.0-dev (>= 2.22.0),
+               libcryptsetup-dev (>= 2:1.6.0),
                libselinux1-dev (>= 2.1.9),
                libacl1-dev,
-               libattr1-dev,
                liblzma-dev,
-               gperf,
-               libkmod-dev (>= 5),
+               libgcrypt11-dev,
+               libkmod-dev (>= 15),
                libblkid-dev (>= 2.20),
                libgirepository1.0-dev (>= 1.31.1),
                gobject-introspection (>= 1.31.1),
-               python-dev,
-               libgcrypt11-dev,
+               python3-all-dev,
+               python3-lxml,
                libglib2.0-doc
 
 Package: systemd
 Architecture: linux-any
 Section: admin
-Priority: extra
-Recommends: libpam-systemd
-Suggests: systemd-gui
-Pre-Depends: ${misc:Pre-Depends}
+Priority: optional
+Recommends: libpam-systemd,
+            dbus
+Suggests: systemd-ui
+Pre-Depends: ${shlibs:Pre-Depends},
+             ${misc:Pre-Depends}
 Depends: ${shlibs:Depends},
          ${misc:Depends},
+         libsystemd0 (= ${binary:Version}),
          util-linux (>= 2.19.1-2),
-         initscripts (>= 2.88dsf-17),
-         systemd-services,
-         udev
-Breaks: lvm2 (<< 2.02.84-1),
-        lsb-base (<< 4.1+Debian4)
+         mount (>= 2.21),
+         initscripts (>= 2.88dsf-53.2),
+         sysv-rc,
+         udev (>= 208-8),
+         acl,
+         adduser,
+         libcap2-bin
+Breaks: lvm2 (<< 2.02.104-1),
+        lsb-base (<< 4.1+Debian4),
+        systemd-shim (<< 8-2)
 Conflicts: klogd
 Description: system and service manager
  systemd is a replacement for sysvinit.  It is dependency-based and
@@ -64,16 +71,23 @@ Description: system and service manager
  It also provides process supervision using cgroups and the ability to
  not only depend on other init script being started, but also
  availability of a given mount point or dbus service.
+ .
+ Installing the systemd package will not switch your init system unless you
+ boot with init=/bin/systemd or install systemd-sysv in addition.
 
 Package: systemd-sysv
 Architecture: linux-any
 Section: admin
 Priority: extra
-Conflicts: sysvinit, upstart, runit-run
-Replaces: sysvinit
-Depends: systemd (= ${binary:Version}),
-         ${shlibs:Depends},
-         ${misc:Depends}
+Conflicts: sysvinit-core,
+           upstart
+Replaces: sysvinit (<< 2.88dsf-44~),
+          sysvinit-core,
+          upstart
+Pre-Depends: systemd
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         systemd (= ${binary:Version})
 Description: system and service manager - SysV links
  systemd is a replacement for sysvinit.  It is dependency-based and
  able to read the LSB init script headers in addition to parsing rcN.d
@@ -84,40 +98,21 @@ Description: system and service manager - SysV links
  availability of a given mount point or dbus service.
  .
  This package provides the manual pages and links needed for systemd
- to replace sysvinit.
-
-Package: systemd-services
-Architecture: linux-any
-Section: admin
-Priority: extra
-Pre-Depends: ${misc:Pre-Depends}
-Depends: ${shlibs:Depends},
-         ${misc:Depends},
-         udev (>= 175-0ubuntu23),
-         dbus
-Recommends: systemd | systemd-shim (>= 3)
-Replaces: systemd (<< 198-1), logind, ubuntu-system-service
-Breaks: systemd (<< 198-1)
-Conflicts: logind
-Provides: logind
-Multi-Arch: foreign
-Description: systemd runtime services
- This package contains the logind and D-BUS services (localed, hostname,
- timedated) from systemd.
+ to replace sysvinit. Installing systemd-sysv will overwrite /sbin/init with a
+ link to systemd.
 
 Package: libpam-systemd
 Architecture: linux-any
 Multi-Arch: same
 Section: admin
-Priority: extra
+Priority: optional
 Pre-Depends: ${misc:Pre-Depends}
-Depends: systemd-services (= ${binary:Version}),
-         ${shlibs:Depends},
-         ${misc:Depends}
-Conflicts: libpam-xdg-support
-Replaces: libpam-xdg-support, systemd-services (<< 198-0ubuntu7)
-Breaks: systemd-services (<< 198-0ubuntu7)
-Provides: libpam-xdg-support
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         systemd (= ${binary:Version}),
+         libpam-runtime (>= 1.0.1-6),
+         dbus,
+         systemd-shim (>= 8-2) | systemd-sysv
 Description: system and service manager - PAM module
  systemd is a replacement for sysvinit.  It is dependency-based and
  able to read the LSB init script headers in addition to parsing rcN.d
@@ -128,114 +123,184 @@ Description: system and service manager - PAM module
  availability of a given mount point or dbus service.
  .
  This package contains the PAM module which registers user sessions in
- the systemd control group hierarchy
+ the systemd control group hierarchy.
+ .
+ If in doubt, do install this package.
+ .
+ Packages that depend on logind functionality need to depend on libpam-systemd.
+
+Package: libsystemd0
+Architecture: linux-any
+Multi-Arch: same
+Section: libs
+Priority: optional
+Pre-Depends: ${shlibs:Depends},
+             ${misc:Pre-Depends}
+Depends: ${misc:Depends}
+Description: systemd utility library
+ The libsystemd0 library provides interfaces to various systemd components.
+
+Package: libsystemd-dev
+Architecture: linux-any
+Multi-Arch: same
+Section: libdevel
+Priority: optional
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         libsystemd0 (= ${binary:Version})
+Breaks: systemd (<< 204-8),
+        libsystemd-login-dev (<< 209),
+        libsystemd-daemon-dev (<< 209),
+        libsystemd-journal-dev (<< 209),
+        libsystemd-id128-dev (<< 209),
+Replaces: systemd (<< 204-8),
+          libsystemd-login-dev (<< 209),
+          libsystemd-daemon-dev (<< 209),
+          libsystemd-journal-dev (<< 209),
+          libsystemd-id128-dev (<< 209),
+Description: systemd utility library - development files
+ The libsystemd0 library provides interfaces to various systemd components.
+ .
+ This package contains the development files.
 
 Package: libsystemd-login0
 Architecture: linux-any
 Multi-Arch: same
-Section: libs
+Section: oldlibs
+Priority: extra
 Pre-Depends: ${misc:Pre-Depends}
 Depends: ${shlibs:Depends},
          ${misc:Depends}
-Description: systemd login utility library
- The libsystemd-login library provides an interface for the
- systemd-logind service which is used to track user sessions and seats.
-
-Package: libsystemd-login-dev
-Architecture: linux-any
-Section: libdevel
-Depends: libsystemd-login0 (= ${binary:Version}),
-         ${shlibs:Depends},
-         ${misc:Depends}
-Description: systemd login utility library - development files
+Description: systemd login utility library (deprecated)
  The libsystemd-login library provides an interface for the
  systemd-logind service which is used to track user sessions and seats.
  .
- This package contains the development files
+ Transitional compatibility library, functionality has been integrated into
+ libsystemd0.
+
+Package: libsystemd-login-dev
+Architecture: linux-any
+Multi-Arch: same
+Section: oldlibs
+Priority: extra
+Depends: ${misc:Depends},
+         libsystemd-dev (>= ${binary:Version})
+Description: systemd login utility library (transitional package)
+ The libsystemd-login library provides an interface for the
+ systemd-logind service which is used to track user sessions and seats.
+ .
+ This is a compatibility package which provides a .pc file for the old library
+ name. That way, packages can be rebuilt against the new libsystemd library
+ without requiring changes to existing configure scripts.
 
 Package: libsystemd-daemon0
 Architecture: linux-any
 Multi-Arch: same
-Section: libs
+Section: oldlibs
+Priority: extra
 Pre-Depends: ${misc:Pre-Depends}
 Depends: ${shlibs:Depends},
          ${misc:Depends}
-Description: systemd utility library
- The sd-daemon library provides a reference implementation of various
- APIs for new-style daemons, as implemented by the systemd init system.
-
-Package: libsystemd-daemon-dev
-Architecture: linux-any
-Section: libdevel
-Depends: libsystemd-daemon0 (= ${binary:Version}),
-         ${shlibs:Depends},
-         ${misc:Depends}
-Description: systemd utility library - development files
+Description: systemd utility library (deprecated)
  The sd-daemon library provides a reference implementation of various
  APIs for new-style daemons, as implemented by the systemd init system.
  .
- This package contains the development files
+ Transitional compatibility library, functionality has been integrated into
+ libsystemd0.
+
+Package: libsystemd-daemon-dev
+Architecture: linux-any
+Multi-Arch: same
+Section: oldlibs
+Priority: extra
+Depends: ${misc:Depends},
+         libsystemd-dev (>= ${binary:Version})
+Description: systemd utility library (transitional package)
+ The sd-daemon library provides a reference implementation of various
+ APIs for new-style daemons, as implemented by the systemd init system.
+ .
+ This is a compatibility package which provides a .pc file for the old library
+ name. That way, packages can be rebuilt against the new libsystemd library
+ without requiring changes to existing configure scripts.
 
 Package: libsystemd-journal0
 Architecture: linux-any
 Multi-Arch: same
-Section: libs
+Section: oldlibs
+Priority: extra
 Pre-Depends: ${misc:Pre-Depends}
 Depends: ${shlibs:Depends},
          ${misc:Depends}
-Description: systemd journal utility library
- The libsystemd-journal library provides an interface for the
- systemd journal service.
-
-Package: libsystemd-journal-dev
-Architecture: linux-any
-Section: libdevel
-Depends: libsystemd-journal0 (= ${binary:Version}),
-         ${shlibs:Depends},
-         ${misc:Depends},
-         libsystemd-id128-dev
-Description: systemd journal utility library - development files
+Description: systemd journal utility library (deprecated)
  The libsystemd-journal library provides an interface for the
  systemd journal service.
  .
- This package contains the development files
+ Transitional compatibility library, functionality has been integrated into
+ libsystemd0.
+
+Package: libsystemd-journal-dev
+Architecture: linux-any
+Multi-Arch: same
+Section: oldlibs
+Priority: extra
+Depends: ${misc:Depends},
+         libsystemd-dev (>= ${binary:Version})
+Description: systemd journal utility library (transitional package)
+ The libsystemd-journal library provides an interface for the
+ systemd journal service.
+ .
+ This is a compatibility package which provides a .pc file for the old library
+ name. That way, packages can be rebuilt against the new libsystemd library
+ without requiring changes to existing configure scripts.
 
 Package: libsystemd-id128-0
 Architecture: linux-any
 Multi-Arch: same
-Section: libs
+Section: oldlibs
+Priority: extra
 Pre-Depends: ${misc:Pre-Depends}
 Depends: ${shlibs:Depends},
          ${misc:Depends}
-Description: systemd 128 bit ID utility library
- The libsystemd-id128 library provides utility functions for generating
- 128 bit IDs.
-
-Package: libsystemd-id128-dev
-Architecture: linux-any
-Section: libdevel
-Depends: libsystemd-id128-0 (= ${binary:Version}),
-         ${shlibs:Depends},
-         ${misc:Depends}
-Description: systemd 128 bit ID utility library - development files
+Description: systemd 128 bit ID utility library (deprecated)
  The libsystemd-id128 library provides utility functions for generating
  128 bit IDs.
  .
- This package contains the development files
+ Transitional compatibility library, functionality has been integrated into
+ libsystemd0.
+
+Package: libsystemd-id128-dev
+Architecture: linux-any
+Multi-Arch: same
+Section: oldlibs
+Priority: extra
+Depends: ${misc:Depends},
+         libsystemd-dev (>= ${binary:Version})
+Description: systemd 128 bit ID utility library (transitional package)
+ The libsystemd-id128 library provides utility functions for generating
+ 128 bit IDs.
+ .
+ This is a compatibility package which provides a .pc file for the old library
+ name. That way, packages can be rebuilt against the new libsystemd library
+ without requiring changes to existing configure scripts.
 
 Package: udev
+Section: admin
+Priority: important
 Architecture: linux-any
 Multi-Arch: foreign
-Pre-Depends: ${misc:Pre-Depends}
+Pre-Depends: debconf (>= 1.4.69) | debconf-2.0
 Depends: ${shlibs:Depends},
          ${misc:Depends},
+         adduser,
          libudev1 (= ${binary:Version}),
          lsb-base (>= 3.0-6),
          util-linux (>= 2.16),
-         s390-tools (>> 1.6.2) [s390]
-Recommends: usbutils,
-            pciutils
-Replaces: systemd-services (<< 202-0ubuntu6)
+         s390-tools (>> 1.6.2) [s390],
+         procps
+Breaks: consolekit (<< 0.4.6-1),
+        kmod (<< 14),
+        systemd (<< 215-1),
+        plymouth (<< 0.9.0-7)
 Description: /dev/ and hotplug management daemon
  udev is a daemon which dynamically creates and removes device nodes from
  /dev/, handles hotplug events and loads drivers at boot time.
@@ -255,6 +320,7 @@ Package: libudev-dev
 Section: libdevel
 Priority: optional
 Architecture: linux-any
+Multi-Arch: same
 Depends: ${shlibs:Depends},
          ${misc:Depends},
          libudev1 (= ${binary:Version})
@@ -265,6 +331,7 @@ Description: libudev development files
 Package: udev-udeb
 XC-Package-Type: udeb
 Section: debian-installer
+Priority: optional
 Architecture: linux-any
 Depends: ${shlibs:Depends},
          ${misc:Depends},
@@ -276,7 +343,7 @@ Description: /dev/ and hotplug management daemon
  This is a minimal version, only for use in the installation system.
 
 Package: libudev1-udeb
-XC-Package-Type: udeb
+Package-Type: udeb
 Section: debian-installer
 Priority: optional
 Architecture: linux-any
@@ -302,7 +369,7 @@ Description: GObject-based wrapper library for libudev
  support.
 
 Package: gir1.2-gudev-1.0
-Section: libs
+Section: introspection
 Priority: optional
 Architecture: linux-any
 Depends: ${shlibs:Depends},
@@ -319,19 +386,40 @@ Architecture: linux-any
 Depends: ${shlibs:Depends},
          ${misc:Depends},
          libgudev-1.0-0 (= ${binary:Version}),
-         gir1.2-gudev-1.0,
+         gir1.2-gudev-1.0 (= ${binary:Version}),
          libglib2.0-dev,
          pkg-config
 Description: libgudev-1.0 development files
  This package contains the files needed for developing applications that
  use libgudev-1.0.
 
-Package: python-systemd
+Package: python3-systemd
 Section: python
-Priority: extra
+Priority: optional
 Architecture: linux-any
 Depends: ${shlibs:Depends},
          ${misc:Depends},
-         ${python:Depends}
-Description: python bindings for the systemd journal
- This package contains Python bindings for the journal submission API.
+         ${python3:Depends}
+Description: Python 3 bindings for systemd
+ This package contains Python 3 bindings for the systemd libraries.
+
+Package: systemd-dbg
+Architecture: linux-any
+Section: debug
+Priority: extra
+Depends: ${misc:Depends},
+         systemd (= ${binary:Version}),
+         udev (= ${binary:Version}),
+         libsystemd0 (= ${binary:Version}),
+         libudev1 (= ${binary:Version})
+Description: system and service manager (debug symbols)
+ systemd is a replacement for sysvinit.  It is dependency-based and
+ able to read the LSB init script headers in addition to parsing rcN.d
+ links as hints.
+ .
+ It also provides process supervision using cgroups and the ability to
+ not only depend on other init script being started, but also
+ availability of a given mount point or dbus service.
+ .
+ This package contains the debugging symbols for systemd, udev and
+ related libraries.

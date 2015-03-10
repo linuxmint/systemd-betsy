@@ -22,7 +22,8 @@
   along with systemd; If not, see <http://www.gnu.org/licenses/>.
 -->
 
-<refentry id="systemd-suspend.service">
+<refentry id="systemd-suspend.service"
+          xmlns:xi="http://www.w3.org/2001/XInclude">
 
         <refentryinfo>
                 <title>systemd-suspend.service</title>
@@ -55,7 +56,7 @@
                 <para><filename>systemd-suspend.service</filename></para>
                 <para><filename>systemd-hibernate.service</filename></para>
                 <para><filename>systemd-hybrid-sleep.service</filename></para>
-                <para><filename>/usr/lib/systemd/systemd-sleep</filename></para>
+                <para><filename>/lib/systemd/systemd-sleep</filename></para>
         </refsynopsisdiv>
 
         <refsect1>
@@ -78,25 +79,25 @@
                 <filename>systemd-suspend.service</filename> (and the
                 other mentioned units, respectively) will run all
                 executables in
-                <filename>/usr/lib/systemd/system-sleep/</filename>
+                <filename>/lib/systemd/system-sleep/</filename>
                 and pass two arguments to them. The first argument
-                will be "<literal>pre</literal>", the second either
-                "<literal>suspend</literal>",
-                "<literal>hibernate</literal>", or
-                "<literal>hybrid-sleep</literal>" depending on the
+                will be <literal>pre</literal>, the second either
+                <literal>suspend</literal>,
+                <literal>hibernate</literal>, or
+                <literal>hybrid-sleep</literal> depending on the
                 chosen action. Immediately after leaving system
                 suspend and/or hibernation the same executables are run,
                 but the first argument is now
-                "<literal>post</literal>". All executables in this
+                <literal>post</literal>. All executables in this
                 directory are executed in parallel, and execution of
                 the action is not continued until all executables
                 have finished.</para>
 
                 <para>Note that scripts or binaries dropped in
-                <filename>/usr/lib/systemd/system-sleep/</filename>
+                <filename>/lib/systemd/system-sleep/</filename>
                 are intended for local use only and should be
                 considered hacks. If applications want to be notified
-                of system suspend/hibernation and resume there are
+                of system suspend/hibernation and resume, there are
                 much nicer interfaces available.</para>
 
                 <para>Note that
@@ -105,11 +106,11 @@
                 <filename>systemd-hybrid-sleep.service</filename>
                 should never be executed directly. Instead, trigger
                 system sleep states with a command such as
-                "<literal>systemctl suspend</literal>" or
+                <literal>systemctl suspend</literal> or
                 similar.</para>
 
                 <para>Internally, this service will echo a string like
-                "<literal>mem</literal>" into
+                <literal>mem</literal> into
                 <filename>/sys/power/state</filename>, to trigger the
                 actual system suspend. What exactly is written
                 where can be configured in the <literal>[Sleep]</literal>
@@ -125,19 +126,9 @@
                 following commands:</para>
 
                 <variablelist>
-                        <varlistentry>
-                                <term><option>-h</option></term>
-                                <term><option>--help</option></term>
+                        <xi:include href="standard-options.xml" xpointer="help" />
+                        <xi:include href="standard-options.xml" xpointer="version" />
 
-                                <listitem><para>Print a short help
-                                text and exit.</para></listitem>
-                        </varlistentry>
-                        <varlistentry>
-                                <term><option>--version</option></term>
-
-                                <listitem><para>Print the systemd version
-                                identifier and exit.</para></listitem>
-                        </varlistentry>
                         <varlistentry>
                                 <term><option>suspend</option></term>
                                 <term><option>hibernate</option></term>

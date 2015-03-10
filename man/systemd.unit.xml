@@ -60,16 +60,22 @@
                 <filename><replaceable>target</replaceable>.target</filename>,
                 <filename><replaceable>path</replaceable>.path</filename>,
                 <filename><replaceable>timer</replaceable>.timer</filename>,
-                <filename><replaceable>snapshot</replaceable>.snapshot</filename></para>
+                <filename><replaceable>snapshot</replaceable>.snapshot</filename>,
+                <filename><replaceable>slice</replaceable>.slice</filename>,
+                <filename><replaceable>scope</replaceable>.scope</filename></para>
 
                 <para><literallayout><filename>/etc/systemd/system/*</filename>
 <filename>/run/systemd/system/*</filename>
-<filename>/usr/lib/systemd/system/*</filename>
+<filename>/lib/systemd/system/*</filename>
 <filename>...</filename>
                 </literallayout></para>
 
-                <para><literallayout><filename>/etc/systemd/user/*</filename>
+                <para><literallayout><filename>$XDG_CONFIG_HOME/systemd/user/*</filename>
+<filename>$HOME/.config/systemd/user/*</filename>
+<filename>/etc/systemd/user/*</filename>
 <filename>/run/systemd/user/*</filename>
+<filename>$XDG_DATA_HOME/systemd/user/*</filename>
+<filename>$HOME/.local/share/systemd/user/*</filename>
 <filename>/usr/lib/systemd/user/*</filename>
 <filename>...</filename>
                 </literallayout></para>
@@ -81,12 +87,15 @@
                 <para>A unit configuration file encodes information
                 about a service, a socket, a device, a mount point, an
                 automount point, a swap file or partition, a start-up
-                target, a file system path, or a timer controlled and
-                supervised by
-                <citerefentry><refentrytitle>systemd</refentrytitle><manvolnum>1</manvolnum></citerefentry>. The
-                syntax is inspired by <ulink
+                target, a watched file system path, a timer controlled
+                and supervised by
+                <citerefentry><refentrytitle>systemd</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
+                a temporary system state snapshot, a resource
+                management slice or a group of externally created
+                processes. The syntax is inspired by <ulink
                 url="http://standards.freedesktop.org/desktop-entry-spec/latest/">XDG
-                Desktop Entry Specification</ulink> <filename>.desktop</filename> files, which are in turn
+                Desktop Entry Specification</ulink>
+                <filename>.desktop</filename> files, which are in turn
                 inspired by Microsoft Windows
                 <filename>.ini</filename> files.</para>
 
@@ -110,7 +119,20 @@
                 <citerefentry><refentrytitle>systemd.path</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
                 <citerefentry><refentrytitle>systemd.timer</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
                 <citerefentry><refentrytitle>systemd.snapshot</refentrytitle><manvolnum>5</manvolnum></citerefentry>.
+                <citerefentry><refentrytitle>systemd.slice</refentrytitle><manvolnum>5</manvolnum></citerefentry>.
+                <citerefentry><refentrytitle>systemd.scope</refentrytitle><manvolnum>5</manvolnum></citerefentry>.
                 </para>
+
+                <para>Various settings are allowed to be specified
+                more than once, in which case the interpretation
+                depends on the setting. Often, multiple settings form
+                a list, and setting to an empty value "resets", which
+                means that previous assignments are ignored. When this
+                is allowed, it is mentioned in the description of the
+                setting. Note that using multiple assignments to the
+                same value makes the unit file incompatible with
+                parsers for the XDG <filename>.desktop</filename> file
+                format.</para>
 
                 <para>Unit files are loaded from a set of paths
                 determined during compilation, described in the next section.
@@ -118,17 +140,19 @@
 
                 <para>Unit files may contain additional options on top
                 of those listed here. If systemd encounters an unknown
-                option it will write a warning log message but
-                continue loading the unit. If an option is prefixed
-                with <option>X-</option> it is ignored completely by
-                systemd. Applications may use this to include
-                additional information in the unit files.</para>
+                option, it will write a warning log message but
+                continue loading the unit. If an option or section name
+                is prefixed with <option>X-</option>, it is ignored
+                completely by systemd. Options within an ignored
+                section do not need the prefix. Applications may use
+                this to include additional information in the unit
+                files.</para>
 
                 <para>Boolean arguments used in unit files can be
                 written in various formats. For positive settings the
                 strings <option>1</option>, <option>yes</option>,
                 <option>true</option> and <option>on</option> are
-                equivalent. For negative settings the strings
+                equivalent. For negative settings, the strings
                 <option>0</option>, <option>no</option>,
                 <option>false</option> and <option>off</option> are
                 equivalent.</para>
@@ -152,14 +176,14 @@
                 space character. This may be used to wrap long lines.</para>
 
                 <para>Along with a unit file
-                <filename>foo.service</filename> the directory
+                <filename>foo.service</filename>, the directory
                 <filename>foo.service.wants/</filename> may exist. All
                 unit files symlinked from such a directory are
                 implicitly added as dependencies of type
                 <varname>Wanted=</varname> to the unit. This is useful
                 to hook units into the start-up of other units,
                 without having to modify their unit files. For details
-                about the semantics of <varname>Wanted=</varname> see
+                about the semantics of <varname>Wanted=</varname>, see
                 below. The preferred way to create symlinks in the
                 <filename>.wants/</filename> directory of a unit file
                 is with the <command>enable</command> command of the
@@ -171,21 +195,15 @@
                 <filename>.requires/</filename> in this case.</para>
 
                 <para>Along with a unit file
-                <filename>foo.service</filename> a directory
+                <filename>foo.service</filename>, a directory
                 <filename>foo.service.d/</filename> may exist. All
-                files with the suffix <filename>.conf</filename> from
+                files with the suffix <literal>.conf</literal> from
                 this directory will be parsed after the file itself is
                 parsed. This is useful to alter or add configuration
                 settings to a unit, without having to modify their
                 unit files. Make sure that the file that is included
                 has the appropriate section headers before any
                 directive.</para>
-
-                <para>If a line starts with <option>.include</option>
-                followed by a file name, the specified file will be
-                parsed at this point. Make sure that the file that is
-                included has the appropriate section headers before
-                any directives.</para>
 
                 <para>Note that while systemd offers a flexible
                 dependency system between units it is recommended to
@@ -195,12 +213,12 @@
                 in a both simpler and more flexible system.</para>
 
                 <para>Some unit names reflect paths existing in the
-                file system name space. Example: a device unit
+                file system namespace. Example: a device unit
                 <filename>dev-sda.device</filename> refers to a device
                 with the device node <filename noindex='true'>/dev/sda</filename> in
-                the file system namespace. If this applies a special
+                the file system namespace. If this applies, a special
                 way to escape the path name is used, so that the
-                result is usable as part of a file name. Basically,
+                result is usable as part of a filename. Basically,
                 given a path, "/" is replaced by "-", and all
                 unprintable characters and the "-" are replaced by
                 C-style "\x20" escapes. The root directory "/" is
@@ -211,12 +229,12 @@
                 <para>Optionally, units may be instantiated from a
                 template file at runtime. This allows creation of
                 multiple units from a single configuration file. If
-                systemd looks for a unit configuration file it will
+                systemd looks for a unit configuration file, it will
                 first search for the literal unit name in the
-                filesystem. If that yields no success and the unit
-                name contains an @ character, systemd will look for a
+                file system. If that yields no success and the unit
+                name contains an <literal>@</literal> character, systemd will look for a
                 unit template that shares the same name but with the
-                instance string (i.e. the part between the @ character
+                instance string (i.e. the part between the <literal>@</literal> character
                 and the suffix) removed. Example: if a service
                 <filename>getty@tty3.service</filename> is requested
                 and no file by that name is found, systemd will look
@@ -230,7 +248,7 @@
                 configuration options. See below for details.</para>
 
                 <para>If a unit file is empty (i.e. has the file size
-                0) or is symlinked to <filename>/dev/null</filename>
+                0) or is symlinked to <filename>/dev/null</filename>,
                 its configuration will not be loaded and it appears
                 with a load state of <literal>masked</literal>, and
                 cannot be activated. Use this as an effective way to
@@ -249,10 +267,9 @@
 
                 <para>Unit files are loaded from a set of paths
                 determined during compilation, described in the two
-                tables below. Unit files found in directories higher
-                in the hierarchy override files with the same name
-                lower in the hierarchy, thus allowing overrides.
-                </para>
+                tables below. Unit files found in directories listed
+                earlier override files with the same name in
+                directories lower in the list.</para>
 
                 <para>When systemd is running in user mode
                 (<option>--user</option>) and the variable
@@ -277,32 +294,16 @@
                     </thead>
                     <tbody>
                       <row>
-                        <entry><filename>/run/systemd/generator.early</filename></entry>
-                        <entry>Generated units (early)</entry>
-                      </row>
-                      <row>
                         <entry><filename>/etc/systemd/system</filename></entry>
                         <entry>Local configuration</entry>
                       </row>
                       <row>
-                        <entry><filename>/run/systemd/systemd</filename></entry>
-                        <entry>Volatile units</entry>
+                        <entry><filename>/run/systemd/system</filename></entry>
+                        <entry>Runtime units</entry>
                       </row>
                       <row>
-                        <entry><filename>/run/systemd/generator</filename></entry>
-                        <entry>Generated units (middle)</entry>
-                      </row>
-                      <row>
-                        <entry><filename>/usr/local/lib/systemd/system</filename></entry>
-                        <entry>Units for local packages</entry>
-                      </row>
-                      <row>
-                        <entry><filename>/usr/lib/systemd/system</filename></entry>
-                        <entry>Units for installed packages</entry>
-                      </row>
-                      <row>
-                        <entry><filename>/run/systemd/generator.late</filename></entry>
-                        <entry>Generated units (late)</entry>
+                        <entry><filename>/lib/systemd/system</filename></entry>
+                        <entry>Units of installed packages</entry>
                       </row>
                     </tbody>
                   </tgroup>
@@ -310,7 +311,7 @@
 
                 <table>
                   <title>
-                    Load path when running in session mode (<option>--user</option>).
+                    Load path when running in user mode (<option>--user</option>).
                   </title>
 
                   <tgroup cols='2'>
@@ -324,8 +325,12 @@
                     </thead>
                     <tbody>
                       <row>
-                        <entry><filename>/tmp/systemd-generator.early.<replaceable>XXXXXX</replaceable></filename></entry>
-                        <entry>Generated units (early)</entry>
+                        <entry><filename>$XDG_CONFIG_HOME/systemd/user</filename></entry>
+                        <entry>User configuration (only used when $XDG_CONFIG_HOME is set)</entry>
+                      </row>
+                      <row>
+                        <entry><filename>$HOME/.config/systemd/user</filename></entry>
+                        <entry>User configuration (only used when $XDG_CONFIG_HOME is not set)</entry>
                       </row>
                       <row>
                         <entry><filename>/etc/systemd/user</filename></entry>
@@ -333,23 +338,19 @@
                       </row>
                       <row>
                         <entry><filename>/run/systemd/user</filename></entry>
-                        <entry>Volatile units</entry>
+                        <entry>Runtime units</entry>
                       </row>
                       <row>
-                        <entry><filename>/tmp/systemd-generator.<replaceable>XXXXXX</replaceable></filename></entry>
-                        <entry>Generated units (middle)</entry>
+                        <entry><filename>$XDG_DATA_HOME/systemd/user</filename></entry>
+                        <entry>Units of packages that have been installed in the home directory (only used when $XDG_DATA_HOME is set)</entry>
                       </row>
                       <row>
-                        <entry><filename>/usr/local/lib/systemd/user</filename></entry>
-                        <entry>Units for local packages</entry>
+                        <entry><filename>$HOME/.local/share/systemd/user</filename></entry>
+                        <entry>Units of packages that have been installed in the home directory (only used when $XDG_DATA_HOME is not set)</entry>
                       </row>
                       <row>
                         <entry><filename>/usr/lib/systemd/user</filename></entry>
-                        <entry>Units for installed packages</entry>
-                      </row>
-                      <row>
-                        <entry><filename>/tmp/systemd-generator.late.<replaceable>XXXXXX</replaceable></filename></entry>
-                        <entry>Generated units (late)</entry>
+                        <entry>Units of packages that have been installed system-wide</entry>
                       </row>
                     </tbody>
                   </tgroup>
@@ -358,12 +359,15 @@
                 <para>Additional units might be loaded into systemd
                 ("linked") from directories not on the unit load
                 path. See the <command>link</command> command for
-                <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>1</manvolnum></citerefentry>.
+                <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>1</manvolnum></citerefentry>. Also,
+                some units are dynamically created via generators
+                <ulink
+                url="http://www.freedesktop.org/wiki/Software/systemd/Generators/">Generators</ulink>.
                 </para>
         </refsect1>
 
         <refsect1>
-                <title>Options</title>
+                <title>[Unit] Section Options</title>
 
                 <para>Unit file may include a [Unit] section, which
                 carries generic information about the unit that is not
@@ -377,12 +381,20 @@
                                 describing the unit. This is intended
                                 for use in UIs to show descriptive
                                 information along with the unit
-                                name.</para></listitem>
+                                name. The description should contain a name
+                                that means something to the end user.
+                                <literal>Apache2 Web Server</literal> is a good
+                                example. Bad examples are
+                                <literal>high-performance light-weight HTTP
+                                server</literal> (too generic) or
+                                <literal>Apache2</literal> (too specific and
+                                meaningless for people who do not know
+                                Apache).</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><varname>Documentation=</varname></term>
-                                <listitem><para>A space separated list
+                                <listitem><para>A space-separated list
                                 of URIs referencing documentation for
                                 this unit or its
                                 configuration. Accepted are only URIs
@@ -393,7 +405,7 @@
                                 <literal>info:</literal>,
                                 <literal>man:</literal>. For more
                                 information about the syntax of these
-                                URIs see
+                                URIs, see
                                 <citerefentry><refentrytitle>uri</refentrytitle><manvolnum>7</manvolnum></citerefentry>. The
                                 URIs should be listed in order of
                                 relevance, starting with the most
@@ -402,10 +414,10 @@
                                 what the unit's purpose is, followed
                                 by how it is configured, followed by
                                 any other related documentation. This
-                                option may be specified more than once
+                                option may be specified more than once,
                                 in which case the specified list of
                                 URIs is merged. If the empty string is
-                                assigned to this option the list is
+                                assigned to this option, the list is
                                 reset and all prior assignments will
                                 have no effect.</para></listitem>
                         </varlistentry>
@@ -420,10 +432,12 @@
                                 of the other units gets deactivated or
                                 its activation fails, this unit will
                                 be deactivated. This option may be
-                                specified more than once, in which
-                                case requirement dependencies for all
-                                listed names are created. Note that
-                                requirement dependencies do not
+                                specified more than once or multiple
+                                space-separated units may be specified
+                                in one option in which case
+                                requirement dependencies for all
+                                listed names will be created. Note
+                                that requirement dependencies do not
                                 influence the order in which services
                                 are started or stopped. This has to be
                                 configured independently with the
@@ -471,7 +485,7 @@
                                 the start-up was pulled in indirectly
                                 by some dependency or automatic
                                 start-up of units that is not
-                                requested by the user this dependency
+                                requested by the user, this dependency
                                 must be fulfilled and otherwise the
                                 transaction fails. Hence, this option
                                 may be used to configure dependencies
@@ -486,23 +500,24 @@
                                 <term><varname>RequisiteOverridable=</varname></term>
 
                                 <listitem><para>Similar to
-                                <varname>Requires=</varname>
-                                and <varname>RequiresOverridable=</varname>, respectively. However,
-                                if a unit listed here is not started
-                                already it will not be started and the
-                                transaction fails
-                                immediately.</para></listitem>
+                                <varname>Requires=</varname> and
+                                <varname>RequiresOverridable=</varname>,
+                                respectively. However, if the units
+                                listed here are not started already,
+                                they will not be started and the
+                                transaction will fail immediately.
+                                </para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><varname>Wants=</varname></term>
 
                                 <listitem><para>A weaker version of
-                                <varname>Requires=</varname>. A unit
+                                <varname>Requires=</varname>. Units
                                 listed in this option will be started
                                 if the configuring unit is. However,
-                                if the listed unit fails to start up
-                                or cannot be added to the transaction
+                                if the listed units fail to start
+                                or cannot be added to the transaction,
                                 this has no impact on the validity of
                                 the transaction as a whole. This is
                                 the recommended way to hook start-up
@@ -511,11 +526,11 @@
 
                                 <para>Note that dependencies of this
                                 type may also be configured outside of
-                                the unit configuration file by
-                                adding a symlink to a
+                                the unit configuration file by adding
+                                symlinks to a
                                 <filename>.wants/</filename> directory
                                 accompanying the unit file. For
-                                details see above.</para></listitem>
+                                details, see above.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -524,7 +539,7 @@
                                 <listitem><para>Configures requirement
                                 dependencies, very similar in style to
                                 <varname>Requires=</varname>, however
-                                in addition to this behavior it also
+                                in addition to this behavior, it also
                                 declares that this unit is stopped
                                 when any of the units listed suddenly
                                 disappears. Units can suddenly,
@@ -544,7 +559,7 @@
                                 of units. When systemd stops or restarts
                                 the units listed here, the action is
                                 propagated to this unit.
-                                Note that this is a one way dependency -
+                                Note that this is a one-way dependency —
                                 changes to this unit do not affect the
                                 listed units.
                                 </para></listitem>
@@ -553,12 +568,12 @@
                         <varlistentry>
                                 <term><varname>Conflicts=</varname></term>
 
-                                <listitem><para>Configures negative
+                                <listitem><para>A space-separated list
+                                of unit names. Configures negative
                                 requirement dependencies. If a unit
-                                has a
-                                <varname>Conflicts=</varname> setting
-                                on another unit, starting the former
-                                will stop the latter and vice
+                                has a <varname>Conflicts=</varname>
+                                setting on another unit, starting the
+                                former will stop the latter and vice
                                 versa. Note that this setting is
                                 independent of and orthogonal to the
                                 <varname>After=</varname> and
@@ -573,9 +588,9 @@
                                 be modified to be fixed (in case one
                                 or both jobs are not a required part
                                 of the transaction). In the latter
-                                case the job that is not the required
+                                case, the job that is not the required
                                 will be removed, or in case both are
-                                not required the unit that conflicts
+                                not required, the unit that conflicts
                                 will be started and the unit that is
                                 conflicted is
                                 stopped.</para></listitem>
@@ -585,7 +600,8 @@
                                 <term><varname>Before=</varname></term>
                                 <term><varname>After=</varname></term>
 
-                                <listitem><para>Configures ordering
+                                <listitem><para>A space-separated list
+                                of unit names. Configures ordering
                                 dependencies between units. If a unit
                                 <filename>foo.service</filename>
                                 contains a setting
@@ -601,7 +617,7 @@
                                 a common pattern to include a unit
                                 name in both the
                                 <varname>After=</varname> and
-                                <varname>Requires=</varname> option in
+                                <varname>Requires=</varname> option, in
                                 which case the unit listed will be
                                 started before the unit that is
                                 configured with these options. This
@@ -629,24 +645,24 @@
                                 dependency on another unit is shut
                                 down while the latter is started up,
                                 the shut down is ordered before the
-                                start-up regardless whether the
+                                start-up regardless of whether the
                                 ordering dependency is actually of
                                 type <varname>After=</varname> or
                                 <varname>Before=</varname>. If two
                                 units have no ordering dependencies
-                                between them they are shut down
-                                or started up simultaneously, and
-                                no ordering takes
+                                between them, they are shut down or
+                                started up simultaneously, and no
+                                ordering takes
                                 place. </para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><varname>OnFailure=</varname></term>
 
-                                <listitem><para>Lists one or more
-                                units that are activated when this
-                                unit enters the
-                                '<literal>failed</literal>'
+                                <listitem><para>A space-separated list
+                                of one or more units that are
+                                activated when this unit enters the
+                                <literal>failed</literal>
                                 state.</para></listitem>
                         </varlistentry>
 
@@ -654,51 +670,106 @@
                                 <term><varname>PropagatesReloadTo=</varname></term>
                                 <term><varname>ReloadPropagatedFrom=</varname></term>
 
-                                <listitem><para>Lists one or more
-                                units where reload requests on the
-                                unit will be propagated to/on the
-                                other unit will be propagated
-                                from. Issuing a reload request on a
-                                unit will automatically also enqueue a
-                                reload request on all units that the
-                                reload request shall be propagated to
-                                via these two
-                                settings.</para></listitem>
+                                <listitem><para>A space-separated list
+                                of one or more units where reload
+                                requests on this unit will be
+                                propagated to, or reload requests on
+                                the other unit will be propagated to
+                                this unit, respectively. Issuing a
+                                reload request on a unit will
+                                automatically also enqueue a reload
+                                request on all units that the reload
+                                request shall be propagated to via
+                                these two settings.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><varname>JoinsNamespaceOf=</varname></term>
+
+                                <listitem><para>For units that start
+                                processes (such as service units),
+                                lists one or more other units whose
+                                network and/or temporary file
+                                namespace to join. This only applies
+                                to unit types which support the
+                                <varname>PrivateNetwork=</varname> and
+                                <varname>PrivateTmp=</varname>
+                                directives (see
+                                <citerefentry><refentrytitle>systemd.exec</refentrytitle><manvolnum>5</manvolnum></citerefentry>
+                                for details). If a unit that has this
+                                setting set is started, its processes
+                                will see the same
+                                <filename>/tmp</filename>,
+                                <filename>/tmp/var</filename> and
+                                network namespace as one listed unit
+                                that is started. If multiple listed
+                                units are already started, it is not
+                                defined which namespace is
+                                joined. Note that this setting only
+                                has an effect if
+                                <varname>PrivateNetwork=</varname>
+                                and/or <varname>PrivateTmp=</varname>
+                                is enabled for both the unit that
+                                joins the namespace and the unit whose
+                                namespace is joined.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><varname>RequiresMountsFor=</varname></term>
 
-                                <listitem><para>Takes a space
-                                separated list of absolute paths. Automatically
-                                adds dependencies of type
-                                <varname>Requires=</varname> and
-                                <varname>After=</varname> for all
+                                <listitem><para>Takes a
+                                space-separated list of absolute
+                                paths. Automatically adds dependencies
+                                of type <varname>Requires=</varname>
+                                and <varname>After=</varname> for all
                                 mount units required to access the
-                                specified path.</para></listitem>
+                                specified path.</para>
+
+                                <para>Mount points marked with
+                                <option>noauto</option> are not
+                                mounted automatically and will be
+                                ignored for the purposes of this
+                                option. If such a mount should be a
+                                requirement for this unit,
+                                direct dependencies on the mount
+                                units may be added
+                                (<varname>Requires=</varname> and
+                                <varname>After=</varname> or
+                                some other combination).
+                                </para></listitem>
                         </varlistentry>
 
                         <varlistentry>
-                                <term><varname>OnFailureIsolate=</varname></term>
+                                <term><varname>OnFailureJobMode=</varname></term>
 
-                                <listitem><para>Takes a boolean
-                                argument. If <option>true</option> the
-                                unit listed in
-                                <varname>OnFailure=</varname> will be
-                                enqueued in isolation mode, i.e. all
-                                units that are not its dependency will
-                                be stopped. If this is set only a
-                                single unit may be listed in
-                                <varname>OnFailure=</varname>. Defaults
+                                <listitem><para>Takes a value of
+                                <literal>fail</literal>,
+                                <literal>replace</literal>,
+                                <literal>replace-irreversibly</literal>,
+                                <literal>isolate</literal>,
+                                <literal>flush</literal>,
+                                <literal>ignore-dependencies</literal>
+                                or
+                                <literal>ignore-requirements</literal>. Defaults
                                 to
-                                <option>false</option>.</para></listitem>
+                                <literal>replace</literal>. Specifies
+                                how the units listed in
+                                <varname>OnFailure=</varname> will be
+                                enqueued. See
+                                <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>1</manvolnum></citerefentry>'s
+                                <option>--job-mode=</option> option
+                                for details on the possible values. If
+                                this is set to
+                                <literal>isolate</literal>, only a
+                                single unit may be listed in
+                                <varname>OnFailure=</varname>..</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><varname>IgnoreOnIsolate=</varname></term>
 
                                 <listitem><para>Takes a boolean
-                                argument. If <option>true</option>
+                                argument. If <option>true</option>,
                                 this unit will not be stopped when
                                 isolating another unit. Defaults to
                                 <option>false</option>.</para></listitem>
@@ -708,7 +779,7 @@
                                 <term><varname>IgnoreOnSnapshot=</varname></term>
 
                                 <listitem><para>Takes a boolean
-                                argument. If <option>true</option>
+                                argument. If <option>true</option>,
                                 this unit will not be included in
                                 snapshots. Defaults to
                                 <option>true</option> for device and
@@ -720,7 +791,7 @@
                                 <term><varname>StopWhenUnneeded=</varname></term>
 
                                 <listitem><para>Takes a boolean
-                                argument. If <option>true</option>
+                                argument. If <option>true</option>,
                                 this unit will be stopped when it is
                                 no longer used. Note that in order to
                                 minimize the work to be executed,
@@ -739,10 +810,10 @@
                                 <term><varname>RefuseManualStop=</varname></term>
 
                                 <listitem><para>Takes a boolean
-                                argument. If <option>true</option>
+                                argument. If <option>true</option>,
                                 this unit can only be activated
                                 or deactivated indirectly. In
-                                this case explicit start-up
+                                this case, explicit start-up
                                 or termination requested by the
                                 user is denied, however if it is
                                 started or stopped as a
@@ -762,10 +833,10 @@
                                 <term><varname>AllowIsolate=</varname></term>
 
                                 <listitem><para>Takes a boolean
-                                argument. If <option>true</option>
+                                argument. If <option>true</option>,
                                 this unit may be used with the
                                 <command>systemctl isolate</command>
-                                command. Otherwise this will be
+                                command. Otherwise, this will be
                                 refused. It probably is a good idea to
                                 leave this disabled except for target
                                 units that shall be used similar to
@@ -779,7 +850,7 @@
                                 <term><varname>DefaultDependencies=</varname></term>
 
                                 <listitem><para>Takes a boolean
-                                argument. If <option>true</option>
+                                argument. If <option>true</option>,
                                 (the default), a few default
                                 dependencies will implicitly be
                                 created for the unit. The actual
@@ -797,7 +868,7 @@
                                 highly recommended to leave this
                                 option enabled for the majority of
                                 common units. If set to
-                                <option>false</option> this option
+                                <option>false</option>, this option
                                 does not disable all implicit
                                 dependencies, just non-essential
                                 ones.</para></listitem>
@@ -809,10 +880,10 @@
                                 <listitem><para>When clients are
                                 waiting for a job of this unit to
                                 complete, time out after the specified
-                                time. If this time limit is reached
+                                time. If this time limit is reached,
                                 the job will be cancelled, the unit
                                 however will not change state or even
-                                enter the '<literal>failed</literal>'
+                                enter the <literal>failed</literal>
                                 mode. This value defaults to 0 (job
                                 timeouts disabled), except for device
                                 units. NB: this timeout is independent
@@ -832,6 +903,14 @@
                         </varlistentry>
 
                         <varlistentry>
+                                <term><varname>ConditionArchitecture=</varname></term>
+                                <term><varname>ConditionVirtualization=</varname></term>
+                                <term><varname>ConditionHost=</varname></term>
+                                <term><varname>ConditionKernelCommandLine=</varname></term>
+                                <term><varname>ConditionSecurity=</varname></term>
+                                <term><varname>ConditionCapability=</varname></term>
+                                <term><varname>ConditionACPower=</varname></term>
+                                <term><varname>ConditionNeedsUpdate=</varname></term>
                                 <term><varname>ConditionPathExists=</varname></term>
                                 <term><varname>ConditionPathExistsGlob=</varname></term>
                                 <term><varname>ConditionPathIsDirectory=</varname></term>
@@ -841,17 +920,11 @@
                                 <term><varname>ConditionDirectoryNotEmpty=</varname></term>
                                 <term><varname>ConditionFileNotEmpty=</varname></term>
                                 <term><varname>ConditionFileIsExecutable=</varname></term>
-                                <term><varname>ConditionKernelCommandLine=</varname></term>
-                                <term><varname>ConditionVirtualization=</varname></term>
-                                <term><varname>ConditionSecurity=</varname></term>
-                                <term><varname>ConditionCapability=</varname></term>
-                                <term><varname>ConditionHost=</varname></term>
-                                <term><varname>ConditionACPower=</varname></term>
                                 <term><varname>ConditionNull=</varname></term>
 
                                 <listitem><para>Before starting a unit
                                 verify that the specified condition is
-                                true. If it is not true the starting
+                                true. If it is not true, the starting
                                 of the unit will be skipped, however
                                 all ordering dependencies of it are
                                 still respected. A failing condition
@@ -861,17 +934,195 @@
                                 queued start job is to be
                                 executed.</para>
 
+                                <para><varname>ConditionArchitecture=</varname>
+                                may be used to check whether the
+                                system is running on a specific
+                                architecture. Takes one of
+                                <varname>x86</varname>,
+                                <varname>x86-64</varname>,
+                                <varname>ppc</varname>,
+                                <varname>ppc-le</varname>,
+                                <varname>ppc64</varname>,
+                                <varname>ppc64-le</varname>,
+                                <varname>ia64</varname>,
+                                <varname>parisc</varname>,
+                                <varname>parisc64</varname>,
+                                <varname>s390</varname>,
+                                <varname>s390x</varname>,
+                                <varname>sparc</varname>,
+                                <varname>sparc64</varname>,
+                                <varname>mips</varname>,
+                                <varname>mips-le</varname>,
+                                <varname>mips64</varname>,
+                                <varname>mips64-le</varname>,
+                                <varname>alpha</varname>,
+                                <varname>arm</varname>,
+                                <varname>arm-be</varname>,
+                                <varname>arm64</varname>,
+                                <varname>arm64-be</varname>,
+                                <varname>sh</varname>,
+                                <varname>sh64</varname>,
+                                <varname>m86k</varname>,
+                                <varname>tilegx</varname>,
+                                <varname>cris</varname> to test
+                                against a specific architecture. The
+                                architecture is determined from the
+                                information returned by
+                                <citerefentry><refentrytitle>uname</refentrytitle><manvolnum>2</manvolnum></citerefentry>
+                                and is thus subject to
+                                <citerefentry><refentrytitle>personality</refentrytitle><manvolnum>2</manvolnum></citerefentry>. Note
+                                that a <varname>Personality=</varname>
+                                setting in the same unit file has no
+                                effect on this condition. A special
+                                architecture name
+                                <varname>native</varname> is mapped to
+                                the architecture the system manager
+                                itself is compiled for. The test may
+                                be negated by prepending an
+                                exclamation mark.</para>
+
+                                <para><varname>ConditionVirtualization=</varname>
+                                may be used to check whether the
+                                system is executed in a virtualized
+                                environment and optionally test
+                                whether it is a specific
+                                implementation. Takes either boolean
+                                value to check if being executed in
+                                any virtualized environment, or one of
+                                <varname>vm</varname> and
+                                <varname>container</varname> to test
+                                against a generic type of
+                                virtualization solution, or one of
+                                <varname>qemu</varname>,
+                                <varname>kvm</varname>,
+                                <varname>zvm</varname>,
+                                <varname>vmware</varname>,
+                                <varname>microsoft</varname>,
+                                <varname>oracle</varname>,
+                                <varname>xen</varname>,
+                                <varname>bochs</varname>,
+                                <varname>uml</varname>,
+                                <varname>openvz</varname>,
+                                <varname>lxc</varname>,
+                                <varname>lxc-libvirt</varname>,
+                                <varname>systemd-nspawn</varname> to
+                                test against a specific
+                                implementation. If multiple
+                                virtualization technologies are nested,
+                                only the innermost is considered. The
+                                test may be negated by prepending an
+                                exclamation mark.</para>
+
+                                <para><varname>ConditionHost=</varname>
+                                may be used to match against the
+                                hostname or machine ID of the
+                                host. This either takes a hostname
+                                string (optionally with shell style
+                                globs) which is tested against the
+                                locally set hostname as returned by
+                                <citerefentry><refentrytitle>gethostname</refentrytitle><manvolnum>2</manvolnum></citerefentry>,
+                                or a machine ID formatted as string
+                                (see
+                                <citerefentry><refentrytitle>machine-id</refentrytitle><manvolnum>5</manvolnum></citerefentry>).
+                                The test may be negated by prepending
+                                an exclamation mark.</para>
+
+                                <para><varname>ConditionKernelCommandLine=</varname>
+                                may be used to check whether a
+                                specific kernel command line option is
+                                set (or if prefixed with the
+                                exclamation mark unset). The argument
+                                must either be a single word, or an
+                                assignment (i.e. two words, separated
+                                <literal>=</literal>). In the former
+                                case the kernel command line is
+                                searched for the word appearing as is,
+                                or as left hand side of an
+                                assignment. In the latter case, the
+                                exact assignment is looked for with
+                                right and left hand side
+                                matching.</para>
+
+                                <para><varname>ConditionSecurity=</varname>
+                                may be used to check whether the given
+                                security module is enabled on the
+                                system. Currently the recognized values
+                                values are <varname>selinux</varname>,
+                                <varname>apparmor</varname>,
+                                <varname>ima</varname> and
+                                <varname>smack</varname>.
+                                The test may be negated by prepending
+                                an exclamation
+                                mark.</para>
+
+                                <para><varname>ConditionCapability=</varname>
+                                may be used to check whether the given
+                                capability exists in the capability
+                                bounding set of the service manager
+                                (i.e. this does not check whether
+                                capability is actually available in
+                                the permitted or effective sets, see
+                                <citerefentry><refentrytitle>capabilities</refentrytitle><manvolnum>7</manvolnum></citerefentry>
+                                for details). Pass a capability name
+                                such as <literal>CAP_MKNOD</literal>,
+                                possibly prefixed with an exclamation
+                                mark to negate the check.</para>
+
+                                <para><varname>ConditionACPower=</varname>
+                                may be used to check whether the
+                                system has AC power, or is exclusively
+                                battery powered at the time of
+                                activation of the unit. This takes a
+                                boolean argument. If set to
+                                <varname>true</varname>, the condition
+                                will hold only if at least one AC
+                                connector of the system is connected
+                                to a power source, or if no AC
+                                connectors are known. Conversely, if
+                                set to <varname>false</varname>, the
+                                condition will hold only if there is
+                                at least one AC connector known and
+                                all AC connectors are disconnected
+                                from a power source.</para>
+
+                                <para><varname>ConditionNeedsUpdate=</varname>
+                                takes one of <filename>/var</filename>
+                                or <filename>/etc</filename> as
+                                argument, possibly prefixed with a
+                                <literal>!</literal> (for inverting
+                                the condition). This condition may be
+                                used to conditionalize units on
+                                whether the specified directory
+                                requires an update because
+                                <filename>/usr</filename>'s
+                                modification time is newer than the
+                                stamp file
+                                <filename>.updated</filename> in the
+                                specified directory. This is useful to
+                                implement offline updates of the
+                                vendor operating system resources in
+                                <filename>/usr</filename> that require
+                                updating of <filename>/etc</filename>
+                                or <filename>/var</filename> on the
+                                next following boot. Units making use
+                                of this condition should order
+                                themselves before
+                                <citerefentry><refentrytitle>systemd-update-done.service</refentrytitle><manvolnum>8</manvolnum></citerefentry>,
+                                to make sure they run before the stamp
+                                files's modification time gets reset
+                                indicating a completed update.</para>
+
                                 <para>With
                                 <varname>ConditionPathExists=</varname>
                                 a file existence condition is
                                 checked before a unit is started. If
                                 the specified absolute path name does
-                                not exist the condition will
+                                not exist, the condition will
                                 fail. If the absolute path name passed
                                 to
                                 <varname>ConditionPathExists=</varname>
                                 is prefixed with an exclamation mark
-                                ('!'), the test is negated, and the unit
+                                (<literal>!</literal>), the test is negated, and the unit
                                 is only started if the path does not
                                 exist.</para>
 
@@ -932,138 +1183,35 @@
                                 exists, is a regular file and marked
                                 executable.</para>
 
-                                <para>Similar,
-                                <varname>ConditionKernelCommandLine=</varname>
-                                may be used to check whether a
-                                specific kernel command line option is
-                                set (or if prefixed with the
-                                exclamation mark unset). The argument
-                                must either be a single word, or an
-                                assignment (i.e. two words, separated
-                                '='). In the former
-                                case the kernel command line is
-                                searched for the word appearing as is,
-                                or as left hand side of an
-                                assignment. In the latter case the
-                                exact assignment is looked for with
-                                right and left hand side
-                                matching.</para>
-
-                                <para><varname>ConditionVirtualization=</varname>
-                                may be used to check whether the
-                                system is executed in a virtualized
-                                environment and optionally test
-                                whether it is a specific
-                                implementation. Takes either boolean
-                                value to check if being executed in
-                                any virtualized environment, or one of
-                                <varname>vm</varname> and
-                                <varname>container</varname> to test
-                                against a generic type of
-                                virtualization solution, or one of
-                                <varname>qemu</varname>,
-                                <varname>kvm</varname>,
-                                <varname>vmware</varname>,
-                                <varname>microsoft</varname>,
-                                <varname>oracle</varname>,
-                                <varname>xen</varname>,
-                                <varname>bochs</varname>,
-                                <varname>chroot</varname>,
-                                <varname>openvz</varname>,
-                                <varname>lxc</varname>,
-                                <varname>lxc-libvirt</varname>,
-                                <varname>systemd-nspawn</varname> to
-                                test against a specific
-                                implementation. If multiple
-                                virtualization technologies are nested
-                                only the innermost is considered. The
-                                test may be negated by prepending an
-                                exclamation mark.</para>
-
-                                <para><varname>ConditionSecurity=</varname>
-                                may be used to check whether the given
-                                security module is enabled on the
-                                system.  Currently the only recognized
-                                values are <varname>selinux</varname>,
-                                <varname>apparmor</varname>, and
-                                <varname>smack</varname>.
-                                The test may be negated by prepending
-                                an exclamation
-                                mark.</para>
-
-                                <para><varname>ConditionCapability=</varname>
-                                may be used to check whether the given
-                                capability exists in the capability
-                                bounding set of the service manager
-                                (i.e. this does not check whether
-                                capability is actually available in
-                                the permitted or effective sets, see
-                                <citerefentry><refentrytitle>capabilities</refentrytitle><manvolnum>7</manvolnum></citerefentry>
-                                for details). Pass a capability name
-                                such as <literal>CAP_MKNOD</literal>,
-                                possibly prefixed with an exclamation
-                                mark to negate the check.</para>
-
-                                <para><varname>ConditionHost=</varname>
-                                may be used to match against the
-                                host name or machine ID of the
-                                host. This either takes a host name
-                                string (optionally with shell style
-                                globs) which is tested against the
-                                locally set host name as returned by
-                                <citerefentry><refentrytitle>gethostname</refentrytitle><manvolnum>2</manvolnum></citerefentry>,
-                                or a machine ID formatted as string
-                                (see
-                                <citerefentry><refentrytitle>machine-id</refentrytitle><manvolnum>5</manvolnum></citerefentry>).
-                                The test may be negated by prepending
-                                an exclamation mark.</para>
-
-                                <para><varname>ConditionACPower=</varname>
-                                may be used to check whether the
-                                system has AC power, or is exclusively
-                                battery powered at the time of
-                                activation of the unit. This takes a
-                                boolean argument. If set to
-                                <varname>true</varname> the condition
-                                will hold only if at least one AC
-                                connector of the system is connected
-                                to a power source, or if no AC
-                                connectors are known. Conversely, if
-                                set to <varname>false</varname> the
-                                condition will hold only if there is
-                                at least one AC connector known and
-                                all AC connectors are disconnected
-                                from a power source.</para>
-
                                 <para>Finally,
                                 <varname>ConditionNull=</varname> may
                                 be used to add a constant condition
                                 check value to the unit. It takes a
                                 boolean argument. If set to
-                                <varname>false</varname> the condition
+                                <varname>false</varname>, the condition
                                 will always fail, otherwise
                                 succeed.</para>
 
                                 <para>If multiple conditions are
-                                specified the unit will be executed if
+                                specified, the unit will be executed if
                                 all of them apply (i.e. a logical AND
                                 is applied). Condition checks can be
                                 prefixed with a pipe symbol (|) in
                                 which case a condition becomes a
                                 triggering condition. If at least one
                                 triggering condition is defined for a
-                                unit then the unit will be executed if
+                                unit, then the unit will be executed if
                                 at least one of the triggering
                                 conditions apply and all of the
                                 non-triggering conditions. If you
                                 prefix an argument with the pipe
-                                symbol and an exclamation mark the
+                                symbol and an exclamation mark, the
                                 pipe symbol must be passed first, the
                                 exclamation second. Except for
                                 <varname>ConditionPathIsSymbolicLink=</varname>,
                                 all path checks follow symlinks. If
                                 any of these options is assigned the
-                                empty string the list of conditions is
+                                empty string, the list of conditions is
                                 reset completely, all previous
                                 condition settings (of any kind) will
                                 have no effect.</para></listitem>
@@ -1077,11 +1225,16 @@
                                 useful for implementation of generator
                                 tools that convert configuration from
                                 an external configuration file format
-                                into native unit files. Thus
+                                into native unit files. This
                                 functionality should not be used in
                                 normal units.</para></listitem>
                         </varlistentry>
                 </variablelist>
+
+        </refsect1>
+
+        <refsect1>
+                <title>[Install] Section Options</title>
 
                 <para>Unit file may include a [Install] section, which
                 carries installation information for the unit. This
@@ -1097,36 +1250,65 @@
                         <varlistentry>
                                 <term><varname>Alias=</varname></term>
 
-                                <listitem><para>Additional names this
-                                unit shall be installed under. The
-                                names listed here must have the same
-                                suffix (i.e. type) as the unit file
-                                name. This option may be specified
-                                more than once, in which case all
-                                listed names are used. At installation
-                                time,
-                                <command>systemctl enable</command>
-                                will create symlinks from these names
-                                to the unit file name.</para></listitem>
+                                <listitem><para>A space-seperated list
+                                of additional names this unit shall be
+                                installed under. The names listed here
+                                must have the same suffix (i.e. type)
+                                as the unit file name. This option may
+                                be specified more than once, in which
+                                case all listed names are used. At
+                                installation time, <command>systemctl
+                                enable</command> will create symlinks
+                                from these names to the unit
+                                filename.</para></listitem>
                         </varlistentry>
 
                         <varlistentry>
                                 <term><varname>WantedBy=</varname></term>
                                 <term><varname>RequiredBy=</varname></term>
 
-                                <listitem><para>Installs a symlink in
-                                the <filename>.wants/</filename>
-                                or <filename>.requires/</filename>
-                                subdirectory for a unit, respectively. This has the
-                                effect that when the listed unit name
-                                is activated the unit listing it is
-                                activated
-                                too. <command>WantedBy=foo.service</command>
+                                <listitem><para>This option may be
+                                used more than once, or a
+                                space-separated list of unit names may
+                                be given. A symbolic link is created
+                                in the <filename>.wants/</filename> or
+                                <filename>.requires/</filename>
+                                directory of each of the listed units
+                                when this unit is installed by
+                                <command>systemctl enable</command>.
+                                This has the effect that a dependency
+                                of type <varname>Wants=</varname> or
+                                <varname>Requires=</varname> is added
+                                from the listed unit to the current
+                                unit. The primary result is that the
+                                current unit will be started when the
+                                listed unit is started. See the
+                                description of
+                                <varname>Wants=</varname> and
+                                <varname>Requires=</varname> in the
+                                [Unit] section for details.</para>
+
+                                <para><command>WantedBy=foo.service</command>
                                 in a service
                                 <filename>bar.service</filename> is
                                 mostly equivalent to
                                 <command>Alias=foo.service.wants/bar.service</command>
-                                in the same file.</para></listitem>
+                                in the same file. In case of template
+                                units, <command>systemctl enable</command>
+                                must be called with an instance name, and
+                                this instance will be added to the
+                                <filename>.wants/</filename> or
+                                <filename>.requires/</filename> list
+                                of the listed unit.
+                                E.g. <command>WantedBy=getty.target</command>
+                                in a service
+                                <filename>getty@.service</filename>
+                                will result in <command>systemctl
+                                enable getty@tty2.service</command>
+                                creating a
+                                <filename>getty.target.wants/getty@tty2.service</filename>
+                                link to <filename>getty@.service</filename>.
+                                </para></listitem>
                         </varlistentry>
 
                         <varlistentry>
@@ -1141,12 +1323,30 @@
                                 and <command>systemctl
                                 disable</command> will automatically
                                 install/uninstall units listed in this option as
-                                well.</para></listitem>
+                                well.</para>
+
+                                <para>This option may be used more
+                                than once, or a space-separated list
+                                of unit names may be
+                                given.</para></listitem>
+                        </varlistentry>
+
+                        <varlistentry>
+                                <term><varname>DefaultInstance=</varname></term>
+
+                                <listitem><para>In template unit files,
+                                this specifies for which instance the
+                                unit shall be enabled if the template
+                                is enabled without any explicitly set
+                                instance. This option has no effect in
+                                non-template unit files. The specified
+                                string must be usable as instance
+                                identifier.</para></listitem>
                         </varlistentry>
                 </variablelist>
 
                 <para>The following specifiers are interpreted in the
-                Install section: %n, %N, %p, %i, %U, %u, %m, %H, %b.
+                Install section: %n, %N, %p, %i, %U, %u, %m, %H, %b, %v.
                 For their meaning see the next section.
                 </para>
         </refsect1>
@@ -1182,52 +1382,52 @@
                       <row>
                         <entry><literal>%N</literal></entry>
                         <entry>Unescaped full unit name</entry>
-                        <entry></entry>
+                        <entry>Same as <literal>%n</literal>, but with escaping undone</entry>
                       </row>
                       <row>
                         <entry><literal>%p</literal></entry>
                         <entry>Prefix name</entry>
-                        <entry>For instantiated units this refers to the string before the @. For non-instantiated units this refers to to the name of the unit with the type suffix removed.</entry>
+                        <entry>For instantiated units, this refers to the string before the <literal>@</literal> character of the unit name. For non-instantiated units, this refers to the name of the unit with the type suffix removed.</entry>
                       </row>
                       <row>
                         <entry><literal>%P</literal></entry>
                         <entry>Unescaped prefix name</entry>
-                        <entry></entry>
+                        <entry>Same as <literal>%p</literal>, but with escaping undone</entry>
                       </row>
                       <row>
                         <entry><literal>%i</literal></entry>
                         <entry>Instance name</entry>
-                        <entry>For instantiated units: this is the string between the @ character and the suffix.</entry>
+                        <entry>For instantiated units: this is the string between the <literal>@</literal> character and the suffix of the unit name.</entry>
                       </row>
                       <row>
                         <entry><literal>%I</literal></entry>
                         <entry>Unescaped instance name</entry>
-                        <entry></entry>
+                        <entry>Same as <literal>%i</literal>, but with escaping undone</entry>
                       </row>
                       <row>
                         <entry><literal>%f</literal></entry>
-                        <entry>Unescaped file name</entry>
-                        <entry>This is either the unescaped instance name (if applicable) with <filename>/</filename> prepended (if applicable), or the prefix name similarly prepended with <filename>/</filename>.</entry>
+                        <entry>Unescaped filename</entry>
+                        <entry>This is either the unescaped instance name (if applicable) with <filename>/</filename> prepended (if applicable), or the prefix name prepended with <filename>/</filename>.</entry>
                       </row>
                       <row>
                         <entry><literal>%c</literal></entry>
                         <entry>Control group path of the unit</entry>
-                        <entry></entry>
+                        <entry>This path does not include the <filename>/sys/fs/cgroup/systemd/</filename> prefix.</entry>
                       </row>
                       <row>
                         <entry><literal>%r</literal></entry>
-                        <entry>Root control group path where units are placed.</entry>
-                        <entry>For system instances this usually resolves to <filename>/system</filename>, except in containers, where the path might be prefixed with the container's root control group.</entry>
+                        <entry>Control group path of the slice the unit is placed in</entry>
+                        <entry>This usually maps to the parent cgroup path of <literal>%c</literal>.</entry>
                       </row>
                       <row>
                         <entry><literal>%R</literal></entry>
-                        <entry>Parent directory of the control group path where units are placed.</entry>
-                        <entry>For system instances this usually resolves to <filename>/</filename>, except in containers, where this resolves to the container's root directory. This specifier is particularly useful in the <varname>ControlGroup=</varname> setting (see <citerefentry><refentrytitle>systemd.exec</refentrytitle><manvolnum>5</manvolnum></citerefentry>).</entry>
+                        <entry>Root control group path below which slices and units are placed</entry>
+                        <entry>For system instances, this resolves to <filename>/</filename>, except in containers, where this maps to the container's root control group path.</entry>
                       </row>
                       <row>
                         <entry><literal>%t</literal></entry>
-                        <entry>Runtime socket dir</entry>
-                        <entry>This is either <filename>/run</filename> (for the system manager) or <literal>$XDG_RUNTIME_DIR</literal> (for user managers).</entry>
+                        <entry>Runtime directory</entry>
+                        <entry>This is either <filename>/run</filename> (for the system manager) or the path <literal>$XDG_RUNTIME_DIR</literal> resolves to (for user managers).</entry>
                       </row>
                       <row>
                         <entry><literal>%u</literal></entry>
@@ -1237,17 +1437,17 @@
                       <row>
                         <entry><literal>%U</literal></entry>
                         <entry>User UID</entry>
-                        <entry>This is the UID of the configured user of the unit, or (if none is set) the user running the systemd instance.</entry>
+                        <entry>This is the numeric UID of the configured user of the unit, or (if none is set) the user running the systemd user instance. Note that this specifier is not available for units run by the systemd system instance (as opposed to those run by a systemd user instance), unless the user has been configured as a numeric UID in the first place or the configured user is the root user.</entry>
                       </row>
                       <row>
                         <entry><literal>%h</literal></entry>
                         <entry>User home directory</entry>
-                        <entry>This is the home directory of the configured user of the unit, or (if none is set) the user running the systemd instance.</entry>
+                        <entry>This is the home directory of the configured user of the unit, or (if none is set) the user running the systemd user instance. Similar to <literal>%U</literal>, this specifier is not available for units run by the systemd system instance, unless the configured user is the root user.</entry>
                       </row>
                       <row>
                         <entry><literal>%s</literal></entry>
                         <entry>User shell</entry>
-                        <entry>This is the shell of the configured user of the unit, or (if none is set) the user running the systemd instance.  If the user is <literal>root</literal> (UID equal to 0), the shell configured in account database is ignored and <filename>/bin/sh</filename> is always used.</entry>
+                        <entry>This is the shell of the configured user of the unit, or (if none is set) the user running the systemd user instance. Similar to <literal>%U</literal>, this specifier is not available for units run by the systemd system instance, unless the configured user is the root user.</entry>
                       </row>
                       <row>
                         <entry><literal>%m</literal></entry>
@@ -1262,12 +1462,17 @@
                       <row>
                         <entry><literal>%H</literal></entry>
                         <entry>Host name</entry>
-                        <entry>The host name of the running system.</entry>
+                        <entry>The hostname of the running system at the point in time the unit configuation is loaded.</entry>
+                      </row>
+                      <row>
+                        <entry><literal>%v</literal></entry>
+                        <entry>Kernel release</entry>
+                        <entry>Identical to <command>uname -r</command> output</entry>
                       </row>
                       <row>
                         <entry><literal>%%</literal></entry>
-                        <entry>Escaped %</entry>
-                        <entry>Single percent sign.</entry>
+                        <entry>Single percent sign</entry>
+                        <entry>Use <literal>%%</literal> in place of <literal>%</literal> to specify a single percent sign.</entry>
                       </row>
                     </tbody>
                   </tgroup>
@@ -1278,7 +1483,7 @@
                 <title>See Also</title>
                 <para>
                         <citerefentry><refentrytitle>systemd</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
-                        <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>8</manvolnum></citerefentry>,
+                        <citerefentry><refentrytitle>systemctl</refentrytitle><manvolnum>1</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>systemd.special</refentrytitle><manvolnum>7</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>systemd.service</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>systemd.socket</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
@@ -1290,9 +1495,12 @@
                         <citerefentry><refentrytitle>systemd.path</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>systemd.timer</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>systemd.snapshot</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+                        <citerefentry><refentrytitle>systemd.scope</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+                        <citerefentry><refentrytitle>systemd.slice</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>systemd.time</refentrytitle><manvolnum>7</manvolnum></citerefentry>,
                         <citerefentry><refentrytitle>capabilities</refentrytitle><manvolnum>7</manvolnum></citerefentry>,
-                        <citerefentry><refentrytitle>systemd.directives</refentrytitle><manvolnum>7</manvolnum></citerefentry>
+                        <citerefentry><refentrytitle>systemd.directives</refentrytitle><manvolnum>7</manvolnum></citerefentry>,
+                        <citerefentry><refentrytitle>uname</refentrytitle><manvolnum>1</manvolnum></citerefentry>
                 </para>
         </refsect1>
 

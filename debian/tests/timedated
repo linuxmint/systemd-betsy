@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-ORIG_TZ=`cat /etc/timezone`
+ORIG_TZ=`grep -v '^#' /etc/timezone`
 
 # should activate daemon and work
 STATUS=`timedatectl`
@@ -12,7 +12,7 @@ OUT=`timedatectl set-timezone Europe/Moscow 2>&1`
 [ -z "$OUT" ]
 [ "`cat /etc/timezone`" = "Europe/Moscow" ]
 STATUS=`timedatectl`
-echo "$STATUS" | grep -q "Timezone: Europe/Moscow (MSK, +"
+echo "$STATUS" | grep -q "Time.*zone: Europe/Moscow (MSK, +"
 
 # reset timezone to original
 OUT=`timedatectl set-timezone $ORIG_TZ 2>&1`

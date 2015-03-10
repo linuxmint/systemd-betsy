@@ -23,16 +23,23 @@
 #include <assert.h>
 #include <errno.h>
 #include <sys/poll.h>
+#include <sys/socket.h>
 #include <string.h>
+#include <fcntl.h>
 
 #include "logs-show.h"
 #include "log.h"
 #include "util.h"
 #include "utf8.h"
 #include "hashmap.h"
+#include "fileio.h"
 #include "journal-internal.h"
 
-#define PRINT_THRESHOLD 128
+/* up to three lines (each up to 100 characters),
+   or 300 characters, whichever is less */
+#define PRINT_LINE_THRESHOLD 3
+#define PRINT_CHAR_THRESHOLD 300
+
 #define JSON_THRESHOLD 4096
 
 static int print_catalog(FILE *f, sd_journal *j) {
@@ -92,13 +99,94 @@ static bool shall_print(const char *p, size_t l, OutputFlags flags) {
         if (flags & OUTPUT_SHOW_ALL)
                 return true;
 
-        if (l >= PRINT_THRESHOLD)
+        if (l >= PRINT_CHAR_THRESHOLD)
                 return false;
 
-        if (!utf8_is_printable_n(p, l))
+        if (!utf8_is_printable(p, l))
                 return false;
 
         return true;
+}
+
+static bool print_multiline(FILE *f, unsigned prefix, unsigned n_columns, OutputFlags flags, int priority, const char* message, size_t message_len) {
+        const char *color_on = "", *color_off = "";
+        const char *pos, *end;
+        bool ellipsized = false;
+        int line = 0;
+
+        if (flags & OUTPUT_COLOR) {
+                if (priority <= LOG_ERR) {
+                        color_on = ANSI_HIGHLIGHT_RED_ON;
+                        color_off = ANSI_HIGHLIGHT_OFF;
+                } else if (priority <= LOG_NOTICE) {
+                        color_on = ANSI_HIGHLIGHT_ON;
+                        color_off = ANSI_HIGHLIGHT_OFF;
+                }
+        }
+
+        /* A special case: make sure that we print a newline when
+           the message is empty. */
+        if (message_len == 0)
+                fputs("\n", f);
+
+        for (pos = message;
+             pos < message + message_len;
+             pos = end + 1, line++) {
+                bool continuation = line > 0;
+                bool tail_line;
+                int len;
+                for (end = pos; end < message + message_len && *end != '\n'; end++)
+                        ;
+                len = end - pos;
+                assert(len >= 0);
+
+                /* We need to figure out when we are showing not-last line, *and*
+                 * will skip subsequent lines. In that case, we will put the dots
+                 * at the end of the line, instead of putting dots in the middle
+                 * or not at all.
+                 */
+                tail_line =
+                        line + 1 == PRINT_LINE_THRESHOLD ||
+                        end + 1 >= message + PRINT_CHAR_THRESHOLD;
+
+                if (flags & (OUTPUT_FULL_WIDTH | OUTPUT_SHOW_ALL) ||
+                    (prefix + len + 1 < n_columns && !tail_line)) {
+                        fprintf(f, "%*s%s%.*s%s\n",
+                                continuation * prefix, "",
+                                color_on, len, pos, color_off);
+                        continue;
+                }
+
+                /* Beyond this point, ellipsization will happen. */
+                ellipsized = true;
+
+                if (prefix < n_columns && n_columns - prefix >= 3) {
+                        if (n_columns - prefix > (unsigned) len + 3)
+                                fprintf(f, "%*s%s%.*s...%s\n",
+                                        continuation * prefix, "",
+                                        color_on, len, pos, color_off);
+                        else {
+                                _cleanup_free_ char *e;
+
+                                e = ellipsize_mem(pos, len, n_columns - prefix,
+                                                  tail_line ? 100 : 90);
+                                if (!e)
+                                        fprintf(f, "%*s%s%.*s%s\n",
+                                                continuation * prefix, "",
+                                                color_on, len, pos, color_off);
+                                else
+                                        fprintf(f, "%*s%s%s%s\n",
+                                                continuation * prefix, "",
+                                                color_on, e, color_off);
+                        }
+                } else
+                        fputs("...\n", f);
+
+                if (tail_line)
+                        break;
+        }
+
+        return ellipsized;
 }
 
 static int output_short(
@@ -115,14 +203,20 @@ static int output_short(
         _cleanup_free_ char *hostname = NULL, *identifier = NULL, *comm = NULL, *pid = NULL, *fake_pid = NULL, *message = NULL, *realtime = NULL, *monotonic = NULL, *priority = NULL;
         size_t hostname_len = 0, identifier_len = 0, comm_len = 0, pid_len = 0, fake_pid_len = 0, message_len = 0, realtime_len = 0, monotonic_len = 0, priority_len = 0;
         int p = LOG_INFO;
-        const char *color_on = "", *color_off = "";
+        bool ellipsized = false;
 
         assert(f);
         assert(j);
 
-        sd_journal_set_data_threshold(j, flags & OUTPUT_SHOW_ALL ? 0 : PRINT_THRESHOLD);
+        /* Set the threshold to one bigger than the actual print
+         * threshold, so that if the line is actually longer than what
+         * we're willing to print, ellipsization will occur. This way
+         * we won't output a misleading line without any indication of
+         * truncation.
+         */
+        sd_journal_set_data_threshold(j, flags & (OUTPUT_SHOW_ALL|OUTPUT_FULL_WIDTH) ? 0 : PRINT_CHAR_THRESHOLD + 1);
 
-        SD_JOURNAL_FOREACH_DATA(j, data, length) {
+        JOURNAL_FOREACH_DATA_RETVAL(j, data, length, r) {
 
                 r = parse_field(data, length, "PRIORITY=", &priority, &priority_len);
                 if (r < 0)
@@ -177,6 +271,9 @@ static int output_short(
                         return r;
         }
 
+        if (r < 0)
+                return r;
+
         if (!message)
                 return 0;
 
@@ -199,7 +296,7 @@ static int output_short(
                         r = sd_journal_get_monotonic_usec(j, &t, &boot_id);
 
                 if (r < 0) {
-                        log_error("Failed to get monotonic: %s", strerror(-r));
+                        log_error("Failed to get monotonic timestamp: %s", strerror(-r));
                         return r;
                 }
 
@@ -224,14 +321,30 @@ static int output_short(
                         r = sd_journal_get_realtime_usec(j, &x);
 
                 if (r < 0) {
-                        log_error("Failed to get realtime: %s", strerror(-r));
+                        log_error("Failed to get realtime timestamp: %s", strerror(-r));
                         return r;
                 }
 
                 t = (time_t) (x / USEC_PER_SEC);
-                if (strftime(buf, sizeof(buf), "%b %d %H:%M:%S", localtime_r(&t, &tm)) <= 0) {
+
+                switch(mode) {
+                case OUTPUT_SHORT_ISO:
+                        r = strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S%z", localtime_r(&t, &tm));
+                        break;
+                case OUTPUT_SHORT_PRECISE:
+                        r = strftime(buf, sizeof(buf), "%b %d %H:%M:%S", localtime_r(&t, &tm));
+                        if (r > 0) {
+                                snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf),
+                                         ".%06llu", (unsigned long long) (x % USEC_PER_SEC));
+                        }
+                        break;
+                default:
+                        r = strftime(buf, sizeof(buf), "%b %d %H:%M:%S", localtime_r(&t, &tm));
+                }
+
+                if (r <= 0) {
                         log_error("Failed to format time.");
-                        return r;
+                        return -EINVAL;
                 }
 
                 fputs(buf, f);
@@ -260,39 +373,19 @@ static int output_short(
                 n += fake_pid_len + 2;
         }
 
-        if (flags & OUTPUT_COLOR) {
-                if (p <= LOG_ERR) {
-                        color_on = ANSI_HIGHLIGHT_RED_ON;
-                        color_off = ANSI_HIGHLIGHT_OFF;
-                } else if (p <= LOG_NOTICE) {
-                        color_on = ANSI_HIGHLIGHT_ON;
-                        color_off = ANSI_HIGHLIGHT_OFF;
-                }
-        }
-
-        if (flags & OUTPUT_SHOW_ALL)
-                fprintf(f, ": %s%.*s%s\n", color_on, (int) message_len, message, color_off);
-        else if (!utf8_is_printable_n(message, message_len)) {
+        if (!(flags & OUTPUT_SHOW_ALL) && !utf8_is_printable(message, message_len)) {
                 char bytes[FORMAT_BYTES_MAX];
                 fprintf(f, ": [%s blob data]\n", format_bytes(bytes, sizeof(bytes), message_len));
-        } else if ((flags & OUTPUT_FULL_WIDTH) || (message_len + n + 1 < n_columns))
-                fprintf(f, ": %s%.*s%s\n", color_on, (int) message_len, message, color_off);
-        else if (n < n_columns && n_columns - n - 2 >= 3) {
-                _cleanup_free_ char *e;
-
-                e = ellipsize_mem(message, message_len, n_columns - n - 2, 90);
-
-                if (!e)
-                        fprintf(f, ": %s%.*s%s\n", color_on, (int) message_len, message, color_off);
-                else
-                        fprintf(f, ": %s%s%s\n", color_on, e, color_off);
-        } else
-                fputs("\n", f);
+        } else {
+                fputs(": ", f);
+                ellipsized |=
+                        print_multiline(f, n + 2, n_columns, flags, p, message, message_len);
+        }
 
         if (flags & OUTPUT_CATALOG)
                 print_catalog(f, j);
 
-        return 0;
+        return ellipsized;
 }
 
 static int output_verbose(
@@ -306,7 +399,7 @@ static int output_verbose(
         size_t length;
         _cleanup_free_ char *cursor = NULL;
         uint64_t realtime;
-        char ts[FORMAT_TIMESTAMP_MAX];
+        char ts[FORMAT_TIMESTAMP_MAX + 7];
         int r;
 
         assert(f);
@@ -314,10 +407,35 @@ static int output_verbose(
 
         sd_journal_set_data_threshold(j, 0);
 
-        r = sd_journal_get_realtime_usec(j, &realtime);
-        if (r < 0) {
-                log_error("Failed to get realtime timestamp: %s", strerror(-r));
+        r = sd_journal_get_data(j, "_SOURCE_REALTIME_TIMESTAMP", &data, &length);
+        if (r == -ENOENT)
+                log_debug("Source realtime timestamp not found");
+        else if (r < 0) {
+                log_full(r == -EADDRNOTAVAIL ? LOG_DEBUG : LOG_ERR,
+                         "Failed to get source realtime timestamp: %s", strerror(-r));
                 return r;
+        } else {
+                _cleanup_free_ char *value = NULL;
+                size_t size;
+
+                r = parse_field(data, length, "_SOURCE_REALTIME_TIMESTAMP=", &value, &size);
+                if (r < 0)
+                        log_debug("_SOURCE_REALTIME_TIMESTAMP invalid: %s", strerror(-r));
+                else {
+                        r = safe_atou64(value, &realtime);
+                        if (r < 0)
+                                log_debug("Failed to parse realtime timestamp: %s",
+                                          strerror(-r));
+                }
+        }
+
+        if (r < 0) {
+                r = sd_journal_get_realtime_usec(j, &realtime);
+                if (r < 0) {
+                        log_full(r == -EADDRNOTAVAIL ? LOG_DEBUG : LOG_ERR,
+                                 "Failed to get realtime timestamp: %s", strerror(-r));
+                        return r;
+                }
         }
 
         r = sd_journal_get_cursor(j, &cursor);
@@ -327,27 +445,46 @@ static int output_verbose(
         }
 
         fprintf(f, "%s [%s]\n",
-                format_timestamp(ts, sizeof(ts), realtime),
+                format_timestamp_us(ts, sizeof(ts), realtime),
                 cursor);
 
-        SD_JOURNAL_FOREACH_DATA(j, data, length) {
-                if (!shall_print(data, length, flags)) {
-                        const char *c;
+        JOURNAL_FOREACH_DATA_RETVAL(j, data, length, r) {
+                const char *c;
+                int fieldlen;
+                const char *on = "", *off = "";
+
+                c = memchr(data, '=', length);
+                if (!c) {
+                        log_error("Invalid field.");
+                        return -EINVAL;
+                }
+                fieldlen = c - (const char*) data;
+
+                if (flags & OUTPUT_COLOR && startswith(data, "MESSAGE=")) {
+                        on = ANSI_HIGHLIGHT_ON;
+                        off = ANSI_HIGHLIGHT_OFF;
+                }
+
+                if (flags & OUTPUT_SHOW_ALL ||
+                    (((length < PRINT_CHAR_THRESHOLD) || flags & OUTPUT_FULL_WIDTH)
+                     && utf8_is_printable(data, length))) {
+                        fprintf(f, "    %s%.*s=", on, fieldlen, (const char*)data);
+                        print_multiline(f, 4 + fieldlen + 1, 0, OUTPUT_FULL_WIDTH, 0, c + 1, length - fieldlen - 1);
+                        fputs(off, f);
+                } else {
                         char bytes[FORMAT_BYTES_MAX];
 
-                        c = memchr(data, '=', length);
-                        if (!c) {
-                                log_error("Invalid field.");
-                                return -EINVAL;
-                        }
-
-                        fprintf(f, "\t%.*s=[%s blob data]\n",
-                               (int) (c - (const char*) data),
-                               (const char*) data,
-                               format_bytes(bytes, sizeof(bytes), length - (c - (const char *) data) - 1));
-                } else
-                        fprintf(f, "\t%.*s\n", (int) length, (const char*) data);
+                        fprintf(f, "    %s%.*s=[%s blob data]%s\n",
+                                on,
+                                (int) (c - (const char*) data),
+                                (const char*) data,
+                                format_bytes(bytes, sizeof(bytes), length - (c - (const char *) data) - 1),
+                                off);
+                }
         }
+
+        if (r < 0)
+                return r;
 
         if (flags & OUTPUT_CATALOG)
                 print_catalog(f, j);
@@ -394,23 +531,25 @@ static int output_export(
 
         fprintf(f,
                 "__CURSOR=%s\n"
-                "__REALTIME_TIMESTAMP=%llu\n"
-                "__MONOTONIC_TIMESTAMP=%llu\n"
+                "__REALTIME_TIMESTAMP="USEC_FMT"\n"
+                "__MONOTONIC_TIMESTAMP="USEC_FMT"\n"
                 "_BOOT_ID=%s\n",
                 cursor,
-                (unsigned long long) realtime,
-                (unsigned long long) monotonic,
+                realtime,
+                monotonic,
                 sd_id128_to_string(boot_id, sid));
 
-        SD_JOURNAL_FOREACH_DATA(j, data, length) {
+        JOURNAL_FOREACH_DATA_RETVAL(j, data, length, r) {
 
                 /* We already printed the boot id, from the data in
                  * the header, hence let's suppress it here */
                 if (length >= 9 &&
-                    memcmp(data, "_BOOT_ID=", 9) == 0)
+                    startswith(data, "_BOOT_ID="))
                         continue;
 
-                if (!utf8_is_printable_n(data, length)) {
+                if (utf8_is_printable_newline(data, length, false))
+                        fwrite(data, length, 1, f);
+                else {
                         const char *c;
                         uint64_t le64;
 
@@ -425,11 +564,13 @@ static int output_export(
                         le64 = htole64(length - (c - (const char*) data) - 1);
                         fwrite(&le64, sizeof(le64), 1, f);
                         fwrite(c + 1, length - (c - (const char*) data) - 1, 1, f);
-                } else
-                        fwrite(data, length, 1, f);
+                }
 
                 fputc('\n', f);
         }
+
+        if (r < 0)
+                return r;
 
         fputc('\n', f);
 
@@ -449,7 +590,7 @@ void json_escape(
 
                 fputs("null", f);
 
-        else if (!utf8_is_printable_n(p, l)) {
+        else if (!utf8_is_printable(p, l)) {
                 bool not_first = false;
 
                 fputs("[ ", f);
@@ -474,7 +615,9 @@ void json_escape(
                         if (*p == '"' || *p == '\\') {
                                 fputc('\\', f);
                                 fputc(*p, f);
-                        } else if (*p < ' ')
+                        } else if (*p == '\n')
+                                fputs("\\n", f);
+                        else if (*p < ' ')
                                 fprintf(f, "\\u%04x", *p);
                         else
                                 fputc(*p, f);
@@ -530,12 +673,12 @@ static int output_json(
                 fprintf(f,
                         "{\n"
                         "\t\"__CURSOR\" : \"%s\",\n"
-                        "\t\"__REALTIME_TIMESTAMP\" : \"%llu\",\n"
-                        "\t\"__MONOTONIC_TIMESTAMP\" : \"%llu\",\n"
+                        "\t\"__REALTIME_TIMESTAMP\" : \""USEC_FMT"\",\n"
+                        "\t\"__MONOTONIC_TIMESTAMP\" : \""USEC_FMT"\",\n"
                         "\t\"_BOOT_ID\" : \"%s\"",
                         cursor,
-                        (unsigned long long) realtime,
-                        (unsigned long long) monotonic,
+                        realtime,
+                        monotonic,
                         sd_id128_to_string(boot_id, sid));
         else {
                 if (mode == OUTPUT_JSON_SSE)
@@ -543,12 +686,12 @@ static int output_json(
 
                 fprintf(f,
                         "{ \"__CURSOR\" : \"%s\", "
-                        "\"__REALTIME_TIMESTAMP\" : \"%llu\", "
-                        "\"__MONOTONIC_TIMESTAMP\" : \"%llu\", "
+                        "\"__REALTIME_TIMESTAMP\" : \""USEC_FMT"\", "
+                        "\"__MONOTONIC_TIMESTAMP\" : \""USEC_FMT"\", "
                         "\"_BOOT_ID\" : \"%s\"",
                         cursor,
-                        (unsigned long long) realtime,
-                        (unsigned long long) monotonic,
+                        realtime,
+                        monotonic,
                         sd_id128_to_string(boot_id, sid));
         }
 
@@ -557,7 +700,7 @@ static int output_json(
                 return -ENOMEM;
 
         /* First round, iterate through the entry and count how often each field appears */
-        SD_JOURNAL_FOREACH_DATA(j, data, length) {
+        JOURNAL_FOREACH_DATA_RETVAL(j, data, length, r) {
                 const char *eq;
                 char *n;
                 unsigned u;
@@ -590,6 +733,9 @@ static int output_json(
                                 goto finish;
                 }
         }
+
+        if (r < 0)
+                return r;
 
         separator = true;
         do {
@@ -747,6 +893,8 @@ static int (*output_funcs[_OUTPUT_MODE_MAX])(
                 OutputFlags flags) = {
 
         [OUTPUT_SHORT] = output_short,
+        [OUTPUT_SHORT_ISO] = output_short,
+        [OUTPUT_SHORT_PRECISE] = output_short,
         [OUTPUT_SHORT_MONOTONIC] = output_short,
         [OUTPUT_VERBOSE] = output_verbose,
         [OUTPUT_EXPORT] = output_export,
@@ -761,7 +909,8 @@ int output_journal(
                 sd_journal *j,
                 OutputMode mode,
                 unsigned n_columns,
-                OutputFlags flags) {
+                OutputFlags flags,
+                bool *ellipsized) {
 
         int ret;
         assert(mode >= 0);
@@ -772,7 +921,26 @@ int output_journal(
 
         ret = output_funcs[mode](f, j, mode, n_columns, flags);
         fflush(stdout);
+
+        if (ellipsized && ret > 0)
+                *ellipsized = true;
+
         return ret;
+}
+
+static int maybe_print_begin_newline(FILE *f, OutputFlags *flags) {
+        assert(f);
+        assert(flags);
+
+        if (!(*flags & OUTPUT_BEGIN_NEWLINE))
+                return 0;
+
+        /* Print a beginning new line if that's request, but only once
+         * on the first line we print. */
+
+        fputc('\n', f);
+        *flags &= ~OUTPUT_BEGIN_NEWLINE;
+        return 0;
 }
 
 static int show_journal(FILE *f,
@@ -781,7 +949,8 @@ static int show_journal(FILE *f,
                         unsigned n_columns,
                         usec_t not_before,
                         unsigned how_many,
-                        OutputFlags flags) {
+                        OutputFlags flags,
+                        bool *ellipsized) {
 
         int r;
         unsigned line = 0;
@@ -831,8 +1000,9 @@ static int show_journal(FILE *f,
                         }
 
                         line ++;
+                        maybe_print_begin_newline(f, &flags);
 
-                        r = output_journal(f, j, mode, n_columns, flags);
+                        r = output_journal(f, j, mode, n_columns, flags, ellipsized);
                         if (r < 0)
                                 goto finish;
                 }
@@ -851,8 +1021,10 @@ static int show_journal(FILE *f,
                         if (r < 0)
                                 goto finish;
 
-                        if (r > 0 && not_before < cutoff)
+                        if (r > 0 && not_before < cutoff) {
+                                maybe_print_begin_newline(f, &flags);
                                 fprintf(f, "Warning: Journal has been rotated since unit was started. Log output is incomplete or unavailable.\n");
+                        }
 
                         warn_cutoff = false;
                 }
@@ -872,15 +1044,15 @@ finish:
 
 int add_matches_for_unit(sd_journal *j, const char *unit) {
         int r;
-        _cleanup_free_ char *m1 = NULL, *m2 = NULL, *m3 = NULL;
+        char *m1, *m2, *m3, *m4;
 
         assert(j);
         assert(unit);
 
-        if (asprintf(&m1, "_SYSTEMD_UNIT=%s", unit) < 0 ||
-            asprintf(&m2, "COREDUMP_UNIT=%s", unit) < 0 ||
-            asprintf(&m3, "UNIT=%s", unit) < 0)
-                return -ENOMEM;
+        m1 = strappenda("_SYSTEMD_UNIT=", unit);
+        m2 = strappenda("COREDUMP_UNIT=", unit);
+        m3 = strappenda("UNIT=", unit);
+        m4 = strappenda("OBJECT_SYSTEMD_UNIT=", unit);
 
         (void)(
             /* Look for messages from the service itself */
@@ -888,47 +1060,191 @@ int add_matches_for_unit(sd_journal *j, const char *unit) {
 
             /* Look for coredumps of the service */
             (r = sd_journal_add_disjunction(j)) ||
-            (r = sd_journal_add_match(j,
-                        "MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1", 0)) ||
+            (r = sd_journal_add_match(j, "MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1", 0)) ||
+            (r = sd_journal_add_match(j, "_UID=0", 0)) ||
             (r = sd_journal_add_match(j, m2, 0)) ||
 
              /* Look for messages from PID 1 about this service */
             (r = sd_journal_add_disjunction(j)) ||
             (r = sd_journal_add_match(j, "_PID=1", 0)) ||
-            (r = sd_journal_add_match(j, m3, 0))
+            (r = sd_journal_add_match(j, m3, 0)) ||
+
+            /* Look for messages from authorized daemons about this service */
+            (r = sd_journal_add_disjunction(j)) ||
+            (r = sd_journal_add_match(j, "_UID=0", 0)) ||
+            (r = sd_journal_add_match(j, m4, 0))
         );
+
+        if (r == 0 && endswith(unit, ".slice")) {
+                char *m5 = strappend("_SYSTEMD_SLICE=", unit);
+
+                /* Show all messages belonging to a slice */
+                (void)(
+                        (r = sd_journal_add_disjunction(j)) ||
+                        (r = sd_journal_add_match(j, m5, 0))
+                        );
+        }
+
         return r;
 }
 
 int add_matches_for_user_unit(sd_journal *j, const char *unit, uid_t uid) {
         int r;
-        _cleanup_free_ char *m1 = NULL, *m2 = NULL, *m3 = NULL, *m4 = NULL;
+        char *m1, *m2, *m3, *m4;
+        char muid[sizeof("_UID=") + DECIMAL_STR_MAX(uid_t)];
 
         assert(j);
         assert(unit);
 
-        if (asprintf(&m1, "_SYSTEMD_USER_UNIT=%s", unit) < 0 ||
-            asprintf(&m2, "USER_UNIT=%s", unit) < 0 ||
-            asprintf(&m3, "COREDUMP_USER_UNIT=%s", unit) < 0 ||
-            asprintf(&m4, "_UID=%d", uid) < 0)
-                return -ENOMEM;
+        m1 = strappenda("_SYSTEMD_USER_UNIT=", unit);
+        m2 = strappenda("USER_UNIT=", unit);
+        m3 = strappenda("COREDUMP_USER_UNIT=", unit);
+        m4 = strappenda("OBJECT_SYSTEMD_USER_UNIT=", unit);
+        sprintf(muid, "_UID="UID_FMT, uid);
 
         (void) (
                 /* Look for messages from the user service itself */
                 (r = sd_journal_add_match(j, m1, 0)) ||
-                (r = sd_journal_add_match(j, m4, 0)) ||
+                (r = sd_journal_add_match(j, muid, 0)) ||
 
                 /* Look for messages from systemd about this service */
                 (r = sd_journal_add_disjunction(j)) ||
                 (r = sd_journal_add_match(j, m2, 0)) ||
-                (r = sd_journal_add_match(j, m4, 0)) ||
+                (r = sd_journal_add_match(j, muid, 0)) ||
 
                 /* Look for coredumps of the service */
                 (r = sd_journal_add_disjunction(j)) ||
                 (r = sd_journal_add_match(j, m3, 0)) ||
-                (r = sd_journal_add_match(j, m4, 0))
+                (r = sd_journal_add_match(j, muid, 0)) ||
+                (r = sd_journal_add_match(j, "_UID=0", 0)) ||
+
+                /* Look for messages from authorized daemons about this service */
+                (r = sd_journal_add_disjunction(j)) ||
+                (r = sd_journal_add_match(j, m4, 0)) ||
+                (r = sd_journal_add_match(j, muid, 0)) ||
+                (r = sd_journal_add_match(j, "_UID=0", 0))
         );
+
+        if (r == 0 && endswith(unit, ".slice")) {
+                char *m5 = strappend("_SYSTEMD_SLICE=", unit);
+
+                /* Show all messages belonging to a slice */
+                (void)(
+                        (r = sd_journal_add_disjunction(j)) ||
+                        (r = sd_journal_add_match(j, m5, 0)) ||
+                        (r = sd_journal_add_match(j, muid, 0))
+                        );
+        }
+
         return r;
+}
+
+static int get_boot_id_for_machine(const char *machine, sd_id128_t *boot_id) {
+        _cleanup_close_pair_ int pair[2] = { -1, -1 };
+        _cleanup_close_ int pidnsfd = -1, mntnsfd = -1, rootfd = -1;
+        pid_t pid, child;
+        siginfo_t si;
+        char buf[37];
+        ssize_t k;
+        int r;
+
+        assert(machine);
+        assert(boot_id);
+
+        if (!filename_is_safe(machine))
+                return -EINVAL;
+
+        r = container_get_leader(machine, &pid);
+        if (r < 0)
+                return r;
+
+        r = namespace_open(pid, &pidnsfd, &mntnsfd, NULL, &rootfd);
+        if (r < 0)
+                return r;
+
+        if (socketpair(AF_UNIX, SOCK_DGRAM, 0, pair) < 0)
+                return -errno;
+
+        child = fork();
+        if (child < 0)
+                return -errno;
+
+        if (child == 0) {
+                int fd;
+
+                pair[0] = safe_close(pair[0]);
+
+                r = namespace_enter(pidnsfd, mntnsfd, -1, rootfd);
+                if (r < 0)
+                        _exit(EXIT_FAILURE);
+
+                fd = open("/proc/sys/kernel/random/boot_id", O_RDONLY|O_CLOEXEC|O_NOCTTY);
+                if (fd < 0)
+                        _exit(EXIT_FAILURE);
+
+                k = loop_read(fd, buf, 36, false);
+                safe_close(fd);
+                if (k != 36)
+                        _exit(EXIT_FAILURE);
+
+                k = send(pair[1], buf, 36, MSG_NOSIGNAL);
+                if (k != 36)
+                        _exit(EXIT_FAILURE);
+
+                _exit(EXIT_SUCCESS);
+        }
+
+        pair[1] = safe_close(pair[1]);
+
+        r = wait_for_terminate(child, &si);
+        if (r < 0 || si.si_code != CLD_EXITED || si.si_status != EXIT_SUCCESS)
+                return r < 0 ? r : -EIO;
+
+        k = recv(pair[0], buf, 36, 0);
+        if (k != 36)
+                return -EIO;
+
+        buf[36] = 0;
+        r = sd_id128_from_string(buf, boot_id);
+        if (r < 0)
+                return r;
+
+        return 0;
+}
+
+int add_match_this_boot(sd_journal *j, const char *machine) {
+        char match[9+32+1] = "_BOOT_ID=";
+        sd_id128_t boot_id;
+        int r;
+
+        assert(j);
+
+        if (machine) {
+                r = get_boot_id_for_machine(machine, &boot_id);
+                if (r < 0) {
+                        log_error("Failed to get boot id of container %s: %s", machine, strerror(-r));
+                        return r;
+                }
+        } else {
+                r = sd_id128_get_boot(&boot_id);
+                if (r < 0) {
+                        log_error("Failed to get boot id: %s", strerror(-r));
+                        return r;
+                }
+        }
+
+        sd_id128_to_string(boot_id, match + 9);
+        r = sd_journal_add_match(j, match, strlen(match));
+        if (r < 0) {
+                log_error("Failed to add match: %s", strerror(-r));
+                return r;
+        }
+
+        r = sd_journal_add_conjunction(j);
+        if (r < 0)
+                return r;
+
+        return 0;
 }
 
 int show_journal_by_unit(
@@ -940,11 +1256,12 @@ int show_journal_by_unit(
                 unsigned how_many,
                 uid_t uid,
                 OutputFlags flags,
-                bool system) {
+                bool system,
+                bool *ellipsized) {
 
         _cleanup_journal_close_ sd_journal*j = NULL;
         int r;
-        int jflags = SD_JOURNAL_LOCAL_ONLY | system * SD_JOURNAL_SYSTEM_ONLY;
+        int jflags = SD_JOURNAL_LOCAL_ONLY | system * SD_JOURNAL_SYSTEM;
 
         assert(mode >= 0);
         assert(mode < _OUTPUT_MODE_MAX);
@@ -957,6 +1274,10 @@ int show_journal_by_unit(
         if (r < 0)
                 return r;
 
+        r = add_match_this_boot(j, NULL);
+        if (r < 0)
+                return r;
+
         if (system)
                 r = add_matches_for_unit(j, unit);
         else
@@ -964,15 +1285,20 @@ int show_journal_by_unit(
         if (r < 0)
                 return r;
 
-        r = show_journal(f, j, mode, n_columns, not_before, how_many, flags);
-        if (r < 0)
-                return r;
+        if (_unlikely_(log_get_max_level() >= LOG_PRI(LOG_DEBUG))) {
+                _cleanup_free_ char *filter;
 
-        return 0;
+                filter = journal_make_match_string(j);
+                log_debug("Journal filter: %s", filter);
+        }
+
+        return show_journal(f, j, mode, n_columns, not_before, how_many, flags, ellipsized);
 }
 
 static const char *const output_mode_table[_OUTPUT_MODE_MAX] = {
         [OUTPUT_SHORT] = "short",
+        [OUTPUT_SHORT_ISO] = "short-iso",
+        [OUTPUT_SHORT_PRECISE] = "short-precise",
         [OUTPUT_SHORT_MONOTONIC] = "short-monotonic",
         [OUTPUT_VERBOSE] = "verbose",
         [OUTPUT_EXPORT] = "export",

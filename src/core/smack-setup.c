@@ -36,11 +36,14 @@
 #include "macro.h"
 #include "smack-setup.h"
 #include "util.h"
+#include "fileio.h"
 #include "log.h"
 #include "label.h"
 
 #define SMACK_CONFIG "/etc/smack/accesses.d/"
-#define CIPSO_CONFIG "/etc/smack/cipso/"
+#define CIPSO_CONFIG "/etc/smack/cipso.d/"
+
+#ifdef HAVE_SMACK
 
 static int write_rules(const char* dstpath, const char* srcdir) {
         _cleanup_fclose_ FILE *dst = NULL;
@@ -84,7 +87,7 @@ static int write_rules(const char* dstpath, const char* srcdir) {
                 if (!policy) {
                         if (r == 0)
                                 r = -errno;
-                        close_nointr_nofail(fd);
+                        safe_close(fd);
                         log_error("Failed to open %s: %m", entry->d_name);
                         continue;
                 }
@@ -111,9 +114,15 @@ static int write_rules(const char* dstpath, const char* srcdir) {
        return r;
 }
 
+#endif
 
-int smack_setup(void) {
+int smack_setup(bool *loaded_policy) {
+
+#ifdef HAVE_SMACK
+
         int r;
+
+        assert(loaded_policy);
 
         r = write_rules("/sys/fs/smackfs/load2", SMACK_CONFIG);
         switch(r) {
@@ -132,6 +141,13 @@ int smack_setup(void) {
                 return 0;
         }
 
+#ifdef SMACK_RUN_LABEL
+        r = write_string_file("/proc/self/attr/current", SMACK_RUN_LABEL);
+        if (r)
+                log_warning("Failed to set SMACK label \"%s\" on self: %s",
+                            SMACK_RUN_LABEL, strerror(-r));
+#endif
+
         r = write_rules("/sys/fs/smackfs/cipso2", CIPSO_CONFIG);
         switch(r) {
         case -ENOENT:
@@ -148,4 +164,10 @@ int smack_setup(void) {
                             strerror(abs(r)));
                 return 0;
         }
+
+        *loaded_policy = true;
+
+#endif
+
+        return 0;
 }

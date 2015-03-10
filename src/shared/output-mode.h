@@ -23,6 +23,8 @@
 
 typedef enum OutputMode {
         OUTPUT_SHORT,
+        OUTPUT_SHORT_ISO,
+        OUTPUT_SHORT_PRECISE,
         OUTPUT_SHORT_MONOTONIC,
         OUTPUT_VERBOSE,
         OUTPUT_EXPORT,
@@ -40,5 +42,6 @@ typedef enum OutputFlags {
         OUTPUT_WARN_CUTOFF    = 1 << 2,
         OUTPUT_FULL_WIDTH     = 1 << 3,
         OUTPUT_COLOR          = 1 << 4,
-        OUTPUT_CATALOG        = 1 << 5
+        OUTPUT_CATALOG        = 1 << 5,
+        OUTPUT_BEGIN_NEWLINE  = 1 << 6,
 } OutputFlags;

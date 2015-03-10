@@ -56,7 +56,7 @@
                 <para><filename>systemd-poweroff.service</filename></para>
                 <para><filename>systemd-reboot.service</filename></para>
                 <para><filename>systemd-kexec.service</filename></para>
-                <para><filename>/usr/lib/systemd/systemd-shutdown</filename></para>
+                <para><filename>/lib/systemd/systemd-shutdown</filename></para>
         </refsynopsisdiv>
 
         <refsect1>
@@ -65,7 +65,7 @@
                 <para><filename>systemd-halt.service</filename> is a
                 system service that is pulled in by
                 <filename>halt.target</filename> and is responsible
-                for the actual system halt. Similar,
+                for the actual system halt. Similarly,
                 <filename>systemd-poweroff.service</filename> is
                 pulled in by <filename>poweroff.target</filename>,
                 <filename>systemd-reboot.service</filename> by
@@ -74,25 +74,31 @@
                 <filename>kexec.target</filename> to execute the
                 respective actions.</para>
 
-                <para>When these services are run they ensure that PID
+                <para>When these services are run, they ensure that PID
                 1 is replaced by the
-                <filename>/usr/lib/systemd/systemd-shutdown</filename>
+                <filename>/lib/systemd/systemd-shutdown</filename>
                 tool which is then responsible for the actual
-                shutdown. Before shutting down this binary will try to
+                shutdown. Before shutting down, this binary will try to
                 unmount all remaining file systems, disable all
                 remaining swap devices, detach all remaining storage
                 devices and kill all remaining processes.</para>
+
+                <para>It is necessary to have this code in a separate binary
+                because otherwise rebooting after an upgrade might be broken —
+                the running PID 1 could still depend on libraries which are not
+                available any more, thus keeping the file system busy, which
+                then cannot be re-mounted read-only.</para>
 
                 <para>Immediately before executing the actual system
                 halt/poweroff/reboot/kexec
                 <filename>systemd-shutdown</filename> will run all
                 executables in
-                <filename>/usr/lib/systemd/system-shutdown/</filename>
+                <filename>/lib/systemd/system-shutdown/</filename>
                 and pass one arguments to them: either
-                "<literal>halt</literal>",
-                "<literal>poweroff</literal>",
-                "<literal>reboot</literal>" or
-                "<literal>kexec</literal>", depending on the chosen
+                <literal>halt</literal>,
+                <literal>poweroff</literal>,
+                <literal>reboot</literal> or
+                <literal>kexec</literal>, depending on the chosen
                 action. All executables in this directory are executed
                 in parallel, and execution of the action is not
                 continued before all executables finished.</para>
@@ -101,7 +107,7 @@
                 <filename>systemd-halt.service</filename> (and the
                 related units) should never be executed
                 directly. Instead, trigger system shutdown with a
-                command such as "<literal>systemctl halt</literal>" or
+                command such as <literal>systemctl halt</literal> or
                 suchlike.</para>
         </refsect1>
 

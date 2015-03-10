@@ -24,7 +24,6 @@
 #include <sys/reboot.h>
 #include <linux/reboot.h>
 #include <sys/wait.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
 #include <sys/syscall.h>
@@ -36,17 +35,108 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <getopt.h>
 
 #include "missing.h"
 #include "log.h"
+#include "fileio.h"
 #include "umount.h"
 #include "util.h"
 #include "mkdir.h"
 #include "virt.h"
 #include "watchdog.h"
 #include "killall.h"
+#include "cgroup-util.h"
+#include "def.h"
 
 #define FINALIZE_ATTEMPTS 50
+
+static char* arg_verb;
+
+static int parse_argv(int argc, char *argv[]) {
+        enum {
+                ARG_LOG_LEVEL = 0x100,
+                ARG_LOG_TARGET,
+                ARG_LOG_COLOR,
+                ARG_LOG_LOCATION,
+        };
+
+        static const struct option options[] = {
+                { "log-level",     required_argument, NULL, ARG_LOG_LEVEL    },
+                { "log-target",    required_argument, NULL, ARG_LOG_TARGET   },
+                { "log-color",     optional_argument, NULL, ARG_LOG_COLOR    },
+                { "log-location",  optional_argument, NULL, ARG_LOG_LOCATION },
+                {}
+        };
+
+        int c, r;
+
+        assert(argc >= 1);
+        assert(argv);
+
+        opterr = 0;
+
+        while ((c = getopt_long(argc, argv, ":", options, NULL)) >= 0)
+                switch (c) {
+
+                case ARG_LOG_LEVEL:
+                        r = log_set_max_level_from_string(optarg);
+                        if (r < 0)
+                                log_error("Failed to parse log level %s, ignoring.", optarg);
+
+                        break;
+
+                case ARG_LOG_TARGET:
+                        r = log_set_target_from_string(optarg);
+                        if (r < 0)
+                                log_error("Failed to parse log target %s, ignoring", optarg);
+
+                        break;
+
+                case ARG_LOG_COLOR:
+
+                        if (optarg) {
+                                r = log_show_color_from_string(optarg);
+                                if (r < 0)
+                                        log_error("Failed to parse log color setting %s, ignoring", optarg);
+                        } else
+                                log_show_color(true);
+
+                        break;
+
+                case ARG_LOG_LOCATION:
+                        if (optarg) {
+                                r = log_show_location_from_string(optarg);
+                                if (r < 0)
+                                        log_error("Failed to parse log location setting %s, ignoring", optarg);
+                        } else
+                                log_show_location(true);
+
+                        break;
+
+                case '?':
+                        log_error("Unknown option %s.", argv[optind-1]);
+                        return -EINVAL;
+
+                case ':':
+                        log_error("Missing argument to %s.", argv[optind-1]);
+                        return -EINVAL;
+
+                default:
+                        assert_not_reached("Unhandled option code.");
+                }
+
+        if (optind >= argc) {
+                log_error("Verb argument missing.");
+                return -EINVAL;
+        }
+
+        arg_verb = argv[optind];
+
+        if (optind + 1 < argc)
+                log_error("Excess arguments, ignoring");
+        return 0;
+}
 
 static int prepare_new_root(void) {
         static const char dirs[] =
@@ -130,45 +220,47 @@ static int pivot_to_new_root(void) {
 }
 
 int main(int argc, char *argv[]) {
-        int cmd, r;
-        unsigned retries;
-        bool need_umount = true, need_swapoff = true, need_loop_detach = true, need_dm_detach = true;
+        bool need_umount, need_swapoff, need_loop_detach, need_dm_detach;
         bool in_container, use_watchdog = false;
+        _cleanup_free_ char *cgroup = NULL;
         char *arguments[3];
+        unsigned retries;
+        int cmd, r;
 
         log_parse_environment();
-        log_set_target(LOG_TARGET_CONSOLE); /* syslog will die if not gone yet */
+        r = parse_argv(argc, argv);
+        if (r < 0)
+                goto error;
+
+        /* journald will die if not gone yet. The log target defaults
+         * to console, but may have been changed by commandline options. */
+
+        log_close_console(); /* force reopen of /dev/console */
         log_open();
 
         umask(0022);
 
         if (getpid() != 1) {
-                log_error("Not executed by init (pid 1).");
+                log_error("Not executed by init (PID 1).");
                 r = -EPERM;
                 goto error;
         }
 
-        if (argc != 2) {
-                log_error("Invalid number of arguments.");
-                r = -EINVAL;
-                goto error;
-        }
-
-        in_container = detect_container(NULL) > 0;
-
-        if (streq(argv[1], "reboot"))
+        if (streq(arg_verb, "reboot"))
                 cmd = RB_AUTOBOOT;
-        else if (streq(argv[1], "poweroff"))
+        else if (streq(arg_verb, "poweroff"))
                 cmd = RB_POWER_OFF;
-        else if (streq(argv[1], "halt"))
+        else if (streq(arg_verb, "halt"))
                 cmd = RB_HALT_SYSTEM;
-        else if (streq(argv[1], "kexec"))
+        else if (streq(arg_verb, "kexec"))
                 cmd = LINUX_REBOOT_CMD_KEXEC;
         else {
-                log_error("Unknown action '%s'.", argv[1]);
                 r = -EINVAL;
+                log_error("Unknown action '%s'.", arg_verb);
                 goto error;
         }
+
+        cg_get_root_path(&cgroup);
 
         use_watchdog = !!getenv("WATCHDOG_USEC");
 
@@ -176,16 +268,17 @@ int main(int argc, char *argv[]) {
         mlockall(MCL_CURRENT|MCL_FUTURE);
 
         log_info("Sending SIGTERM to remaining processes...");
-        broadcast_signal(SIGTERM, true);
+        broadcast_signal(SIGTERM, true, true);
 
         log_info("Sending SIGKILL to remaining processes...");
-        broadcast_signal(SIGKILL, true);
+        broadcast_signal(SIGKILL, true, false);
 
-        if (in_container) {
-                need_swapoff = false;
-                need_dm_detach = false;
-                need_loop_detach = false;
-        }
+        in_container = detect_container(NULL) > 0;
+
+        need_umount = true;
+        need_swapoff = !in_container;
+        need_loop_detach = !in_container;
+        need_dm_detach = !in_container;
 
         /* Unmount all mountpoints, swaps, and loopback devices */
         for (retries = 0; retries < FINALIZE_ATTEMPTS; retries++) {
@@ -193,6 +286,13 @@ int main(int argc, char *argv[]) {
 
                 if (use_watchdog)
                         watchdog_ping();
+
+                /* Let's trim the cgroup tree on each iteration so
+                   that we leave an empty cgroup tree around, so that
+                   container managers get a nice notify event when we
+                   are down */
+                if (cgroup)
+                        cg_trim(SYSTEMD_CGROUP_CONTROLLER, cgroup, false);
 
                 if (need_umount) {
                         log_info("Unmounting file systems.");
@@ -246,41 +346,57 @@ int main(int argc, char *argv[]) {
                         if (retries > 0)
                                 log_info("All filesystems, swaps, loop devices, DM devices detached.");
                         /* Yay, done */
-                        break;
+                        goto initrd_jump;
                 }
 
                 /* If in this iteration we didn't manage to
                  * unmount/deactivate anything, we simply give up */
                 if (!changed) {
-                        log_error("Cannot finalize remaining file systems and devices, giving up.");
-                        break;
+                        log_info("Cannot finalize remaining%s%s%s%s continuing.",
+                                 need_umount ? " file systems," : "",
+                                 need_swapoff ? " swap devices," : "",
+                                 need_loop_detach ? " loop devices," : "",
+                                 need_dm_detach ? " DM devices," : "");
+                        goto initrd_jump;
                 }
 
-                log_debug("Couldn't finalize remaining file systems and devices after %u retries, trying again.", retries+1);
+                log_debug("After %u retries, couldn't finalize remaining %s%s%s%s trying again.",
+                          retries + 1,
+                          need_umount ? " file systems," : "",
+                          need_swapoff ? " swap devices," : "",
+                          need_loop_detach ? " loop devices," : "",
+                          need_dm_detach ? " DM devices," : "");
         }
 
-        if (retries >= FINALIZE_ATTEMPTS)
-                log_error("Too many iterations, giving up.");
-        else
-                log_info("Storage is finalized.");
+        log_error("Too many iterations, giving up.");
+
+ initrd_jump:
 
         arguments[0] = NULL;
-        arguments[1] = argv[1];
+        arguments[1] = arg_verb;
         arguments[2] = NULL;
-        execute_directory(SYSTEM_SHUTDOWN_PATH, NULL, arguments);
+        execute_directory(SYSTEM_SHUTDOWN_PATH, NULL, DEFAULT_TIMEOUT_USEC, arguments);
 
         if (!in_container && !in_initrd() &&
             access("/run/initramfs/shutdown", X_OK) == 0) {
 
                 if (prepare_new_root() >= 0 &&
                     pivot_to_new_root() >= 0) {
+                        arguments[0] = (char*) "/shutdown";
 
                         log_info("Returning to initrd...");
 
-                        execv("/shutdown", argv);
+                        execv("/shutdown", arguments);
                         log_error("Failed to execute shutdown binary: %m");
                 }
         }
+
+        if (need_umount || need_swapoff || need_loop_detach || need_dm_detach)
+                log_error("Failed to finalize %s%s%s%s ignoring",
+                          need_umount ? " file systems," : "",
+                          need_swapoff ? " swap devices," : "",
+                          need_loop_detach ? " loop devices," : "",
+                          need_dm_detach ? " DM devices," : "");
 
         /* The kernel will automaticall flush ATA disks and suchlike
          * on reboot(), but the file systems need to be synce'd
@@ -289,35 +405,69 @@ int main(int argc, char *argv[]) {
         if (!in_container)
                 sync();
 
-        if (cmd == LINUX_REBOOT_CMD_KEXEC) {
+        switch (cmd) {
+
+        case LINUX_REBOOT_CMD_KEXEC:
 
                 if (!in_container) {
                         /* We cheat and exec kexec to avoid doing all its work */
-                        pid_t pid = fork();
+                        pid_t pid;
 
+                        log_info("Rebooting with kexec.");
+
+                        pid = fork();
                         if (pid < 0)
-                                log_error("Could not fork: %m. Falling back to normal reboot.");
-                        else if (pid > 0) {
-                                wait_for_terminate_and_warn("kexec", pid);
-                                log_warning("kexec failed. Falling back to normal reboot.");
-                        } else {
+                                log_error("Failed to fork: %m");
+                        else if (pid == 0) {
+
+                                const char * const args[] = {
+                                        KEXEC, "-e", NULL
+                                };
+
                                 /* Child */
-                                const char *args[3] = { "/sbin/kexec", "-e", NULL };
+
                                 execv(args[0], (char * const *) args);
-                                return EXIT_FAILURE;
-                        }
+                                _exit(EXIT_FAILURE);
+                        } else
+                                wait_for_terminate_and_warn("kexec", pid);
                 }
 
                 cmd = RB_AUTOBOOT;
+                /* Fall through */
+
+        case RB_AUTOBOOT:
+
+                if (!in_container) {
+                        _cleanup_free_ char *param = NULL;
+
+                        if (read_one_line_file(REBOOT_PARAM_FILE, &param) >= 0) {
+                                log_info("Rebooting with argument '%s'.", param);
+                                syscall(SYS_reboot, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,
+                                        LINUX_REBOOT_CMD_RESTART2, param);
+                        }
+                }
+
+                log_info("Rebooting.");
+                break;
+
+        case RB_POWER_OFF:
+                log_info("Powering off.");
+                break;
+
+        case RB_HALT_SYSTEM:
+                log_info("Halting system.");
+                break;
+
+        default:
+                assert_not_reached("Unknown magic");
         }
 
         reboot(cmd);
-
         if (errno == EPERM && in_container) {
                 /* If we are in a container, and we lacked
                  * CAP_SYS_BOOT just exit, this will kill our
                  * container for good. */
-                log_error("Exiting container.");
+                log_info("Exiting container.");
                 exit(0);
         }
 
@@ -328,5 +478,4 @@ int main(int argc, char *argv[]) {
         log_error("Critical error while doing system shutdown: %s", strerror(-r));
 
         freeze();
-        return EXIT_FAILURE;
 }

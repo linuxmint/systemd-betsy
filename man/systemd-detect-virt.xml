@@ -21,7 +21,8 @@
   along with systemd; If not, see <http://www.gnu.org/licenses/>.
 -->
 
-<refentry id="systemd-detect-virt">
+<refentry id="systemd-detect-virt"
+          xmlns:xi="http://www.w3.org/2001/XInclude">
 
         <refentryinfo>
                 <title>systemd-detect-virt</title>
@@ -70,14 +71,15 @@
                 <varname>microsoft</varname>,
                 <varname>oracle</varname>, <varname>xen</varname>,
                 <varname>bochs</varname>, <varname>chroot</varname>,
+                <varname>uml</varname>,
                 <varname>openvz</varname>, <varname>lxc</varname>,
                 <varname>lxc-libvirt</varname>,
                 <varname>systemd-nspawn</varname>.</para>
 
-                <para>If multiple virtualization solutions are used
+                <para>If multiple virtualization solutions are used,
                 only the "innermost" is detected and identified. That
                 means if both VM virtualization and container
-                virtualization are used in conjunction only the latter
+                virtualization are used in conjunction, only the latter
                 will be identified (unless <option>--vm</option> is
                 passed).</para>
         </refsect1>
@@ -88,21 +90,6 @@
                 <para>The following options are understood:</para>
 
                 <variablelist>
-                        <varlistentry>
-                                <term><option>-h</option></term>
-                                <term><option>--help</option></term>
-
-                                <listitem><para>Prints a short help
-                                text and exits.</para></listitem>
-                        </varlistentry>
-
-                        <varlistentry>
-                                <term><option>--version</option></term>
-
-                                <listitem><para>Prints a short version
-                                string and exits.</para></listitem>
-                        </varlistentry>
-
                         <varlistentry>
                                 <term><option>-c</option></term>
                                 <term><option>--container</option></term>
@@ -130,6 +117,8 @@
                                 identifier.</para></listitem>
                         </varlistentry>
 
+                        <xi:include href="standard-options.xml" xpointer="help" />
+                        <xi:include href="standard-options.xml" xpointer="version" />
                 </variablelist>
 
         </refsect1>
@@ -137,7 +126,7 @@
         <refsect1>
                 <title>Exit status</title>
 
-                <para>If a virtualization technology is detected 0 is
+                <para>If a virtualization technology is detected, 0 is
                 returned, a non-zero code otherwise.</para>
         </refsect1>
 

@@ -50,29 +50,35 @@ static int symlink_and_label(const char *old_path, const char *new_path) {
         return r;
 }
 
-void dev_setup(const char *prefix) {
+int dev_setup(const char *prefix) {
         const char *j, *k;
 
         static const char symlinks[] =
-                "/proc/kcore\0"      "/dev/core\0"
+                "-/proc/kcore\0"     "/dev/core\0"
                 "/proc/self/fd\0"    "/dev/fd\0"
                 "/proc/self/fd/0\0"  "/dev/stdin\0"
                 "/proc/self/fd/1\0"  "/dev/stdout\0"
                 "/proc/self/fd/2\0"  "/dev/stderr\0";
 
         NULSTR_FOREACH_PAIR(j, k, symlinks) {
+                if (j[0] == '-') {
+                        j++;
+
+                        if (access(j, F_OK) < 0)
+                                continue;
+                }
 
                 if (prefix) {
-                        char *linkname;
+                        _cleanup_free_ char *link_name = NULL;
 
-                        if (asprintf(&linkname, "%s/%s", prefix, k) < 0) {
-                                log_oom();
-                                break;
-                        }
+                        link_name = strjoin(prefix, "/", k, NULL);
+                        if (!link_name)
+                                return -ENOMEM;
 
-                        symlink_and_label(j, linkname);
-                        free(linkname);
+                        symlink_and_label(j, link_name);
                 } else
                         symlink_and_label(j, k);
         }
+
+        return 0;
 }

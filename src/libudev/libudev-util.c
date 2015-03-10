@@ -32,8 +32,11 @@
 #include <sys/stat.h>
 #include <sys/param.h>
 
+#include "device-nodes.h"
 #include "libudev.h"
 #include "libudev-private.h"
+#include "utf8.h"
+#include "MurmurHash2.h"
 
 /**
  * SECTION:libudev-util
@@ -200,6 +203,7 @@ int util_resolve_subsys_kernel(struct udev *udev, const char *string,
         udev_device_unref(dev);
         return 0;
 }
+
 ssize_t util_get_sys_core_link_value(struct udev *udev, const char *slink, const char *syspath, char *value, size_t size)
 {
         char path[UTIL_PATH_SIZE];
@@ -306,129 +310,6 @@ void util_remove_trailing_chars(char *path, char c)
                 path[--len] = '\0';
 }
 
-/* count of characters used to encode one unicode char */
-static int utf8_encoded_expected_len(const char *str)
-{
-        unsigned char c = (unsigned char)str[0];
-
-        if (c < 0x80)
-                return 1;
-        if ((c & 0xe0) == 0xc0)
-                return 2;
-        if ((c & 0xf0) == 0xe0)
-                return 3;
-        if ((c & 0xf8) == 0xf0)
-                return 4;
-        if ((c & 0xfc) == 0xf8)
-                return 5;
-        if ((c & 0xfe) == 0xfc)
-                return 6;
-        return 0;
-}
-
-/* decode one unicode char */
-static int utf8_encoded_to_unichar(const char *str)
-{
-        int unichar;
-        int len;
-        int i;
-
-        len = utf8_encoded_expected_len(str);
-        switch (len) {
-        case 1:
-                return (int)str[0];
-        case 2:
-                unichar = str[0] & 0x1f;
-                break;
-        case 3:
-                unichar = (int)str[0] & 0x0f;
-                break;
-        case 4:
-                unichar = (int)str[0] & 0x07;
-                break;
-        case 5:
-                unichar = (int)str[0] & 0x03;
-                break;
-        case 6:
-                unichar = (int)str[0] & 0x01;
-                break;
-        default:
-                return -1;
-        }
-
-        for (i = 1; i < len; i++) {
-                if (((int)str[i] & 0xc0) != 0x80)
-                        return -1;
-                unichar <<= 6;
-                unichar |= (int)str[i] & 0x3f;
-        }
-
-        return unichar;
-}
-
-/* expected size used to encode one unicode char */
-static int utf8_unichar_to_encoded_len(int unichar)
-{
-        if (unichar < 0x80)
-                return 1;
-        if (unichar < 0x800)
-                return 2;
-        if (unichar < 0x10000)
-                return 3;
-        if (unichar < 0x200000)
-                return 4;
-        if (unichar < 0x4000000)
-                return 5;
-        return 6;
-}
-
-/* check if unicode char has a valid numeric range */
-static int utf8_unichar_valid_range(int unichar)
-{
-        if (unichar > 0x10ffff)
-                return 0;
-        if ((unichar & 0xfffff800) == 0xd800)
-                return 0;
-        if ((unichar > 0xfdcf) && (unichar < 0xfdf0))
-                return 0;
-        if ((unichar & 0xffff) == 0xffff)
-                return 0;
-        return 1;
-}
-
-/* validate one encoded unicode char and return its length */
-static int utf8_encoded_valid_unichar(const char *str)
-{
-        int len;
-        int unichar;
-        int i;
-
-        len = utf8_encoded_expected_len(str);
-        if (len == 0)
-                return -1;
-
-        /* ascii is valid */
-        if (len == 1)
-                return 1;
-
-        /* check if expected encoded chars are available */
-        for (i = 0; i < len; i++)
-                if ((str[i] & 0x80) != 0x80)
-                        return -1;
-
-        unichar = utf8_encoded_to_unichar(str);
-
-        /* check if encoded length matches encoded value */
-        if (utf8_unichar_to_encoded_len(unichar) != len)
-                return -1;
-
-        /* check if value has valid range */
-        if (!utf8_unichar_valid_range(unichar))
-                return -1;
-
-        return len;
-}
-
 int util_replace_whitespace(const char *str, char *to, size_t len)
 {
         size_t i, j;
@@ -457,17 +338,6 @@ int util_replace_whitespace(const char *str, char *to, size_t len)
         return 0;
 }
 
-static int is_whitelisted(char c, const char *white)
-{
-        if ((c >= '0' && c <= '9') ||
-            (c >= 'A' && c <= 'Z') ||
-            (c >= 'a' && c <= 'z') ||
-            strchr("#+-.:=@_", c) != NULL ||
-            (white != NULL && strchr(white, c) != NULL))
-                return 1;
-        return 0;
-}
-
 /* allow chars in whitelist, plain ascii, hex-escaping and valid utf8 */
 int util_replace_chars(char *str, const char *white)
 {
@@ -477,7 +347,7 @@ int util_replace_chars(char *str, const char *white)
         while (str[i] != '\0') {
                 int len;
 
-                if (is_whitelisted(str[i], white)) {
+                if (whitelisted_char_for_devnode(str[i], white)) {
                         i++;
                         continue;
                 }
@@ -525,99 +395,12 @@ int util_replace_chars(char *str, const char *white)
  **/
 _public_ int udev_util_encode_string(const char *str, char *str_enc, size_t len)
 {
-        size_t i, j;
-
-        if (str == NULL || str_enc == NULL)
-                return -1;
-
-        for (i = 0, j = 0; str[i] != '\0'; i++) {
-                int seqlen;
-
-                seqlen = utf8_encoded_valid_unichar(&str[i]);
-                if (seqlen > 1) {
-                        if (len-j < (size_t)seqlen)
-                                goto err;
-                        memcpy(&str_enc[j], &str[i], seqlen);
-                        j += seqlen;
-                        i += (seqlen-1);
-                } else if (str[i] == '\\' || !is_whitelisted(str[i], NULL)) {
-                        if (len-j < 4)
-                                goto err;
-                        sprintf(&str_enc[j], "\\x%02x", (unsigned char) str[i]);
-                        j += 4;
-                } else {
-                        if (len-j < 1)
-                                goto err;
-                        str_enc[j] = str[i];
-                        j++;
-                }
-        }
-        if (len-j < 1)
-                goto err;
-        str_enc[j] = '\0';
-        return 0;
-err:
-        return -1;
-}
-
-/*
- * http://sites.google.com/site/murmurhash/
- *
- * All code is released to the public domain. For business purposes,
- * Murmurhash is under the MIT license.
- *
- */
-static unsigned int murmur_hash2(const char *key, size_t len, unsigned int seed)
-{
-        /*
-         *  'm' and 'r' are mixing constants generated offline.
-         *  They're not really 'magic', they just happen to work well.
-         */
-        const unsigned int m = 0x5bd1e995;
-        const int r = 24;
-
-        /* initialize the hash to a 'random' value */
-        unsigned int h = seed ^ len;
-
-        /* mix 4 bytes at a time into the hash */
-        const unsigned char * data = (const unsigned char *)key;
-
-        while(len >= sizeof(unsigned int)) {
-                unsigned int k;
-
-                memcpy(&k, data, sizeof(k));
-                k *= m;
-                k ^= k >> r;
-                k *= m;
-                h *= m;
-                h ^= k;
-
-                data += sizeof(k);
-                len -= sizeof(k);
-        }
-
-        /* handle the last few bytes of the input array */
-        switch(len) {
-        case 3:
-                h ^= data[2] << 16;
-        case 2:
-                h ^= data[1] << 8;
-        case 1:
-                h ^= data[0];
-                h *= m;
-        };
-
-        /* do a few final mixes of the hash to ensure the last few bytes are well-incorporated */
-        h ^= h >> 13;
-        h *= m;
-        h ^= h >> 15;
-
-        return h;
+        return encode_devnode_name(str, str_enc, len);
 }
 
 unsigned int util_string_hash32(const char *str)
 {
-        return murmur_hash2(str, strlen(str), 0);
+        return MurmurHash2(str, strlen(str), 0);
 }
 
 /* get a bunch of bit numbers out of the hash, and set the bits in our bit field */
@@ -635,7 +418,7 @@ uint64_t util_string_bloom64(const char *str)
 
 ssize_t print_kmsg(const char *fmt, ...)
 {
-        int fd;
+        _cleanup_close_ int fd = -1;
         va_list ap;
         char text[1024];
         ssize_t len;
@@ -653,7 +436,7 @@ ssize_t print_kmsg(const char *fmt, ...)
 
         ret = write(fd, text, len);
         if (ret < 0)
-                ret = -errno;
-        close(fd);
+                return -errno;
+
         return ret;
 }
